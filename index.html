@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fluxo de Saída — Painel do Analista</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar__brand">
+    <span class="topbar__mark" aria-hidden="true">◧</span>
+    <div>
+      <h1>Fluxo de Saída</h1>
+      <p class="topbar__sub">Painel do analista · classificação ABC &amp; diretriz de estoque</p>
+    </div>
+  </div>
+  <div class="topbar__meta">
+    <div id="syncInfo" class="sync-info">
+      <span class="sync-dot" id="syncDot"></span>
+      <span id="syncText">não conectado</span>
+    </div>
+    <button id="refreshBtn" class="btn btn--ghost" title="Atualizar dados">↻ Atualizar</button>
+    <button id="settingsBtn" class="btn btn--icon" title="Configurar endpoint">⚙</button>
+  </div>
+</header>
+
+<dialog id="settingsDialog">
+  <form id="settingsForm">
+    <h2>Conectar ao endpoint</h2>
+    <p class="muted">URL do "Aplicativo da web" publicado no Apps Script (WebApp.gs) e o token configurado lá.</p>
+    <label>URL do Web App
+      <input type="url" id="apiUrl" placeholder="https://script.google.com/macros/s/AKfycb.../exec" required>
+    </label>
+    <label>Token
+      <input type="text" id="apiToken" placeholder="mesmo valor de WEBAPP_TOKEN" required>
+    </label>
+    <div class="dialog__actions">
+      <button type="button" id="cancelSettings" class="btn btn--ghost">Cancelar</button>
+      <button type="submit" class="btn btn--primary">Salvar e conectar</button>
+    </div>
+  </form>
+</dialog>
+
+<main id="app">
+
+  <section id="emptyState" class="empty-state">
+    <p>Nenhum dado carregado ainda.</p>
+    <button id="emptyConnectBtn" class="btn btn--primary">Conectar ao endpoint ⚙</button>
+  </section>
+
+  <section id="dashboard" class="dashboard hidden">
+
+    <section class="kpi-row" id="kpiRow" aria-label="Resumo por diretriz"></section>
+
+    <section class="panel filters">
+      <input type="search" id="searchInput" placeholder="Buscar por SKU, fornecedor ou categoria…" class="search-input">
+      <div class="chip-group" id="diretrizFilters" aria-label="Filtrar por diretriz"></div>
+      <div class="chip-group" id="classifFilters" aria-label="Filtrar por classificação"></div>
+    </section>
+
+    <section class="grid-2">
+      <div class="panel">
+        <h2 class="panel__title">Saída diária — últimos 30 dias</h2>
+        <canvas id="dailyChart" height="180"></canvas>
+      </div>
+      <div class="panel">
+        <h2 class="panel__title">Saída mensal — últimos 12 meses</h2>
+        <canvas id="monthlyChart" height="180"></canvas>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__header">
+        <h2 class="panel__title">Produtos <span id="rowCount" class="muted"></span></h2>
+      </div>
+      <div class="table-wrap">
+        <table id="productsTable">
+          <thead>
+            <tr>
+              <th data-key="SKU">SKU</th>
+              <th data-key="Fornecedor">Fornecedor</th>
+              <th data-key="Categorias">Categoria</th>
+              <th data-key="Estoque WMS" class="num">Estoque WMS</th>
+              <th data-key="Últimos 7 dias" class="num">7 dias</th>
+              <th data-key="Últimos 30 dias" class="num">30 dias</th>
+              <th data-key="Evolução últimos 30 dias" class="num">Evol. 30d</th>
+              <th data-key="Classificação">Classificação</th>
+              <th data-key="DIRETRIZ">DIRETRIZ</th>
+            </tr>
+          </thead>
+          <tbody id="productsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </section>
+</main>
+
+<template id="rowDetailTemplate">
+  <tr class="row-detail">
+    <td colspan="9">
+      <canvas class="sparkline" height="60"></canvas>
+    </td>
+  </tr>
+</template>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
