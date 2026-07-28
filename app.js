@@ -118,6 +118,7 @@
         const c = abcBySku[p["SKUs"]];
         p["_fat_rs"] = c ? Number(c["Faturamento 12M"] || 0) : 0;
         p["_lucro_rs"] = c ? Number(c["Lucro 12M"] || 0) : 0;
+        p["_margem"] = p["_fat_rs"] ? p["_lucro_rs"] / p["_fat_rs"] : 0;
       });
 
       setSyncStatus("ok", data.gerado_em);
@@ -296,6 +297,15 @@
     return `<span class="price-normal">${fmtMoney(atual)}</span>`;
   }
 
+  function fmtRupturaBadge(dias) {
+    if (dias === "-" || dias === undefined || dias === null || dias === "") {
+      return `<span class="badge badge--ignorar">-</span>`;
+    }
+    const n = Number(dias);
+    const urgencia = n <= 7 ? "saida" : n <= 15 ? "despriorizado" : "manutencao";
+    return `<span class="badge badge--${urgencia}">${n}d</span>`;
+  }
+
   function renderTable() {
     const rows = filteredSortedProducts();
     els.rowCount.textContent = `(${rows.length})`;
@@ -312,6 +322,8 @@
         <td class="num">${fmtPct(p["Evolução últimos 30 dias"])}</td>
         <td class="num">${fmtMoney(p["_fat_rs"])}</td>
         <td class="num">${fmtMoney(p["_lucro_rs"])}</td>
+        <td class="num">${fmtPct(p["_margem"])}</td>
+        <td class="num">${fmtRupturaBadge(p["Dias até Ruptura"])}</td>
         <td>${badge(p["Classificação"], "classif")}</td>
         <td>${badge(p["DIRETRIZ"])}</td>
       </tr>`).join("");
