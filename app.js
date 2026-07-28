@@ -163,6 +163,7 @@
     if (!state.produtos.length) { showEmpty(); return; }
     showDashboard();
     renderHero();
+    renderMeta();
     renderKpis();
     renderAbc();
     renderTendencia();
@@ -323,6 +324,7 @@
         <td>${escapeHtml(p["Fornecedor"] ?? "-")}</td>
         <td>${escapeHtml(p["Categorias"] ?? "-")}</td>
         <td class="num">${fmtPrecoComPromo(p["Preço Original"], p["Preço Atual"])}</td>
+        <td class="num">${fmtNum(p["Estoque AnyMarket disponível"])}</td>
         <td class="num">${fmtNum(p["Estoque WMS"])}</td>
         <td class="num">${fmtNum(p["Últimos 7 dias"])}</td>
         <td class="num">${fmtNum(p["Últimos 15 dias"])}</td>
@@ -560,6 +562,66 @@
       card("➡️ Estável (30d)", "flat", estavel) +
       card("📉 Caindo (30d)", "down", caindo);
   }
+
+  function metaKey_() {
+    const d = new Date();
+    return `meta_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+
+  function renderMeta() {
+    const meta = Number(localStorage.getItem(metaKey_()) || 0);
+    document.getElementById("metaInput").value = meta || "";
+
+    const content = document.getElementById("metaContent");
+    if (!meta) {
+      content.innerHTML = `<p class="meta-empty">Defina uma meta de faturamento para este mês e acompanhe se o ritmo diário está suficiente para bater ela.</p>`;
+      return;
+    }
+
+    const mensal = state.financeiro_mensal;
+    const faturadoMes = mensal.length ? Number(mensal[mensal.length - 1].faturamento || 0) : 0;
+
+    const hoje = new Date();
+    const diaAtual = hoje.getDate();
+    const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
+    const diasRestantes = Math.max(diasNoMes - diaAtual, 0);
+
+    const progresso = Math.min((faturadoMes / meta) * 100, 999);
+    const projecao = diaAtual > 0 ? (faturadoMes / diaAtual) * diasNoMes : 0;
+    const faltaAtingir = Math.max(meta - faturadoMes, 0);
+    const ritmoNecessario = diasRestantes > 0 ? faltaAtingir / diasRestantes : (faltaAtingir > 0 ? Infinity : 0);
+    const vaiBater = projecao >= meta;
+
+    let corBarra = "critico";
+    if (progresso >= 100) corBarra = "ok";
+    else if (vaiBater) corBarra = "ok";
+    else if (progresso >= 60) corBarra = "risco";
+
+    content.innerHTML = `
+      <div class="meta-progress-bar"><div class="meta-progress-fill ${corBarra}" style="width:${Math.min(progresso, 100)}%"></div></div>
+      <p class="muted" style="font-size:12px;margin:0 0 12px;">${fmtMoney(faturadoMes)} de ${fmtMoney(meta)} — ${progresso.toFixed(0)}% da meta, dia ${diaAtual} de ${diasNoMes}</p>
+      <div class="meta-grid">
+        <div class="meta-stat">
+          <span class="meta-stat__value">${fmtMoney(ritmoNecessario === Infinity ? faltaAtingir : ritmoNecessario)}</span>
+          <span class="meta-stat__label">${diasRestantes > 0 ? "Precisa faturar por dia (dias restantes)" : "Faltam " + fmtMoney(faltaAtingir) + " — sem dias restantes"}</span>
+        </div>
+        <div class="meta-stat">
+          <span class="meta-stat__value" style="color:${vaiBater ? "var(--manutencao)" : "var(--saida)"}">${fmtMoney(projecao)}</span>
+          <span class="meta-stat__label">Projeção de fechamento (no ritmo atual)</span>
+        </div>
+        <div class="meta-stat">
+          <span class="meta-stat__value" style="color:${vaiBater ? "var(--manutencao)" : "var(--saida)"}">${vaiBater ? "✅ Vai bater" : "⚠️ Abaixo da meta"}</span>
+          <span class="meta-stat__label">Com base no ritmo até agora</span>
+        </div>
+      </div>`;
+  }
+
+  document.getElementById("metaSaveBtn").addEventListener("click", () => {
+    const v = Number(document.getElementById("metaInput").value || 0);
+    if (v > 0) localStorage.setItem(metaKey_(), String(v));
+    else localStorage.removeItem(metaKey_());
+    renderMeta();
+  });
 
   // ---------------------------------------------------------------- events
   document.querySelectorAll("#productsTable thead th").forEach((th) => {

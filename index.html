@@ -77,6 +77,18 @@
       <p class="hero__footnote">comparado com a média dos últimos 7 dias</p>
     </section>
 
+    <h2 class="section-title">Meta do mês</h2>
+    <section class="panel meta-panel" id="metaPanel">
+      <div class="panel__header">
+        <h2 class="panel__title">🎯 Meta de faturamento</h2>
+        <div class="meta-input-row">
+          <input type="number" id="metaInput" placeholder="Ex: 15000" class="search-input meta-input">
+          <button id="metaSaveBtn" class="btn btn--primary">Salvar</button>
+        </div>
+      </div>
+      <div id="metaContent"></div>
+    </section>
+
     <h2 class="section-title">Visão geral dos produtos</h2>
     <section class="kpi-row" id="kpiRow" aria-label="Resumo por diretriz"></section>
 
@@ -160,6 +172,7 @@
                 <th data-key="Fornecedor">Fornecedor</th>
                 <th data-key="Categorias">Categoria</th>
                 <th data-key="Preço Atual" class="num">Preço</th>
+                <th data-key="Estoque AnyMarket disponível" class="num">Estoque</th>
                 <th data-key="Estoque WMS" class="num">Estoque WMS</th>
                 <th data-key="Últimos 7 dias" class="num">7 dias</th>
                 <th data-key="Últimos 15 dias" class="num">15 dias</th>
@@ -205,7 +218,7 @@
 
 <template id="rowDetailTemplate">
   <tr class="row-detail">
-    <td colspan="15">
+    <td colspan="16">
       <canvas class="sparkline" height="60"></canvas>
     </td>
   </tr>
