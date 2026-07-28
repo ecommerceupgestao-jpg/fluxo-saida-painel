@@ -55,11 +55,34 @@
 
   <section id="dashboard" class="dashboard hidden">
 
+    <section class="hero" id="heroToday" aria-label="Resumo de hoje">
+      <div class="hero__label"><span class="live-dot"></span>HOJE</div>
+      <div class="hero__grid">
+        <div class="hero__stat">
+          <span class="hero__value" id="heroFaturamento">—</span>
+          <span class="hero__caption" id="heroFaturamentoDelta"></span>
+          <span class="hero__label-small">Faturamento</span>
+        </div>
+        <div class="hero__stat">
+          <span class="hero__value" id="heroUnidades">—</span>
+          <span class="hero__caption" id="heroUnidadesDelta"></span>
+          <span class="hero__label-small">Unidades vendidas</span>
+        </div>
+        <div class="hero__stat">
+          <span class="hero__value" id="heroLucro">—</span>
+          <span class="hero__caption" id="heroLucroDelta"></span>
+          <span class="hero__label-small">Lucro</span>
+        </div>
+      </div>
+      <p class="hero__footnote">comparado com a média dos últimos 7 dias</p>
+    </section>
+
+    <h2 class="section-title">Visão geral dos produtos</h2>
     <section class="kpi-row" id="kpiRow" aria-label="Resumo por diretriz"></section>
 
+    <h2 class="section-title">Financeiro</h2>
     <section class="panel financeiro">
       <div class="panel__header">
-        <h2 class="panel__title">Financeiro</h2>
         <div class="toggle-group" id="financeiroToggle">
           <button type="button" class="toggle-btn active" data-view="mensal">Mensal</button>
           <button type="button" class="toggle-btn" data-view="diario">Diário</button>
@@ -69,6 +92,7 @@
       <canvas id="financeiroChart" height="140"></canvas>
     </section>
 
+    <h2 class="section-title">Produtos</h2>
     <section class="panel filters">
       <input type="search" id="searchInput" placeholder="Buscar por SKU, fornecedor ou categoria…" class="search-input">
       <div class="chip-group" id="diretrizFilters" aria-label="Filtrar por diretriz"></div>
@@ -88,7 +112,7 @@
 
     <section class="panel">
       <div class="panel__header">
-        <h2 class="panel__title">Produtos <span id="rowCount" class="muted"></span></h2>
+        <h2 class="panel__title">Lista completa <span id="rowCount" class="muted"></span></h2>
       </div>
       <div class="table-wrap">
         <table id="productsTable">

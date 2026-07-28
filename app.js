@@ -115,7 +115,7 @@
     els.syncDot.className = "sync-dot" + (status === "ok" ? " ok" : status === "erro" ? " err" : "");
     if (status === "ok") {
       const d = geradoEm ? new Date(geradoEm) : new Date();
-      els.syncText.textContent = "atualizado " + d.toLocaleString("pt-BR");
+      els.syncText.textContent = "atualizado " + d.toLocaleTimeString("pt-BR") + " · auto";
     } else if (status === "erro") {
       els.syncText.textContent = "erro ao conectar — confira URL/token";
     } else {
@@ -136,6 +136,7 @@
   function render() {
     if (!state.produtos.length) { showEmpty(); return; }
     showDashboard();
+    renderHero();
     renderKpis();
     renderFinanceiro();
     renderFilters();
@@ -366,6 +367,40 @@
     renderFinanceiro();
   });
 
+  function renderHero() {
+    const fin = state.financeiro_diario;
+    if (!fin.length) return;
+    const hoje = fin[fin.length - 1];
+    const anteriores = fin.slice(Math.max(0, fin.length - 8), fin.length - 1); // até 7 dias antes de hoje
+    const mediaAnterior = (campo) => anteriores.length
+      ? anteriores.reduce((s, d) => s + Number(d[campo] || 0), 0) / anteriores.length
+      : 0;
+
+    const unidadesPorDia = (idx) => state.saida_diaria.reduce((s, p) => s + Number((p.serie[idx] || {}).quantidade || 0), 0);
+    const idxHoje = (state.saida_diaria[0]?.serie.length || 1) - 1;
+    const unidadesHoje = unidadesPorDia(idxHoje);
+    let unidadesMedia = 0;
+    if (idxHoje > 0) {
+      const janela = Math.min(7, idxHoje);
+      for (let k = 1; k <= janela; k++) unidadesMedia += unidadesPorDia(idxHoje - k);
+      unidadesMedia = unidadesMedia / janela;
+    }
+
+    setHeroStat('heroFaturamento', 'heroFaturamentoDelta', fmtMoney(hoje.faturamento), hoje.faturamento, mediaAnterior('faturamento'));
+    setHeroStat('heroUnidades', 'heroUnidadesDelta', fmtNum(unidadesHoje), unidadesHoje, unidadesMedia);
+    setHeroStat('heroLucro', 'heroLucroDelta', fmtMoney(hoje.lucro_liquido), hoje.lucro_liquido, mediaAnterior('lucro_liquido'));
+  }
+
+  function setHeroStat(valueId, deltaId, displayValue, valor, media) {
+    document.getElementById(valueId).textContent = displayValue;
+    const deltaEl = document.getElementById(deltaId);
+    if (!media || media === 0) { deltaEl.textContent = ''; deltaEl.className = 'hero__caption'; return; }
+    const pct = ((valor - media) / media) * 100;
+    const seta = pct >= 0 ? '▲' : '▼';
+    deltaEl.textContent = `${seta} ${Math.abs(pct).toFixed(0)}% vs média`;
+    deltaEl.className = 'hero__caption ' + (pct >= 0 ? 'up' : 'down');
+  }
+
   // ---------------------------------------------------------------- events
   document.querySelectorAll("#productsTable thead th").forEach((th) => {
     th.addEventListener("click", () => {
@@ -397,4 +432,5 @@
 
   // ---------------------------------------------------------------- init
   fetchData();
+  setInterval(fetchData, 60000); // atualiza sozinho a cada 1 min
 })();
