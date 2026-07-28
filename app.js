@@ -1,6 +1,14 @@
 (function () {
   "use strict";
 
+  // Tema escuro: aplica cor clara nos textos/eixos de TODOS os gráficos de
+  // uma vez, sem precisar repetir em cada configuração individual.
+  if (window.Chart) {
+    Chart.defaults.color = "#8B909C";
+    Chart.defaults.borderColor = "rgba(255,255,255,0.08)";
+    Chart.defaults.font.family = "'IBM Plex Sans', system-ui, sans-serif";
+  }
+
   const STORAGE_KEY = "fluxo_saida_config_v1";
   const els = {
     emptyState: document.getElementById("emptyState"),
@@ -350,7 +358,7 @@
         labels: serie.map((s) => (s.periodo || "").slice(5)),
         datasets: [{
           data: serie.map((s) => s.quantidade),
-          borderColor: "#2F6FED", backgroundColor: "rgba(47,111,237,0.08)",
+          borderColor: "#5B9CFF", backgroundColor: "rgba(91,156,255,0.12)",
           fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2,
         }],
       },
@@ -368,7 +376,7 @@
     if (monthlyChart) monthlyChart.destroy();
     monthlyChart = new Chart(document.getElementById("monthlyChart"), {
       type: "bar",
-      data: { labels: monthlyTotals.labels, datasets: [{ data: monthlyTotals.values, backgroundColor: "#1E9E62" }] },
+      data: { labels: monthlyTotals.labels, datasets: [{ data: monthlyTotals.values, backgroundColor: "#3DDC97" }] },
       options: chartOptions(),
     });
   }
@@ -388,7 +396,7 @@
     if (dailyChart) dailyChart.destroy();
     dailyChart = new Chart(document.getElementById("dailyChart"), {
       type: "bar",
-      data: { labels, datasets: [{ data: values, backgroundColor: "#2F6FED" }] },
+      data: { labels, datasets: [{ data: values, backgroundColor: "#5B9CFF" }] },
       options: chartOptions(),
     });
   }
@@ -466,9 +474,9 @@
       data: {
         labels: serie.map((p) => (p.periodo || "").slice(state.financeiroView === "mensal" ? 0 : 5)),
         datasets: [
-          { label: "Faturamento", data: serie.map((p) => p.faturamento), backgroundColor: "#1E9E62" },
-          { label: "Custo + Taxas + Frete + Ads", data: serie.map((p) => Number(p.custo || 0) + Number(p.taxa_ml || 0) + Number(p.frete || 0) + Number(p.gasto_ads || 0)), backgroundColor: "#D63C3C" },
-          { label: "Lucro líquido", data: serie.map((p) => p.lucro_liquido), type: "line", borderColor: "#2F6FED", backgroundColor: "transparent", tension: 0.3, pointRadius: 2 },
+          { label: "Faturamento", data: serie.map((p) => p.faturamento), backgroundColor: "#3DDC97" },
+          { label: "Custo + Taxas + Frete + Ads", data: serie.map((p) => Number(p.custo || 0) + Number(p.taxa_ml || 0) + Number(p.frete || 0) + Number(p.gasto_ads || 0)), backgroundColor: "#FF6B6B" },
+          { label: "Lucro líquido", data: serie.map((p) => p.lucro_liquido), type: "line", borderColor: "#5B9CFF", backgroundColor: "transparent", tension: 0.3, pointRadius: 2 },
         ],
       },
       options: {
