@@ -138,10 +138,43 @@
     showDashboard();
     renderHero();
     renderKpis();
+    renderTendencia();
+    renderRuptura();
     renderFinanceiro();
     renderFilters();
     renderTable();
     renderCharts();
+  }
+
+  function renderRuptura() {
+    const tbody = document.getElementById("rupturaBody");
+    const candidatos = state.produtos
+      .filter((p) => {
+        const dias = p["Dias até Ruptura"];
+        return dias !== "-" && dias !== undefined && dias !== null && !p["Inativo"];
+      })
+      .sort((a, b) => Number(a["Dias até Ruptura"]) - Number(b["Dias até Ruptura"]))
+      .slice(0, 12);
+
+    if (!candidatos.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="muted" style="text-align:center;padding:20px;">Nenhum produto com venda recente para projetar.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = candidatos.map((p) => {
+      const dias = Number(p["Dias até Ruptura"]);
+      const urgencia = dias <= 7 ? "saida" : dias <= 15 ? "despriorizado" : "manutencao";
+      const previsao = p["Previsão de Ruptura"] ? new Date(p["Previsão de Ruptura"]).toLocaleDateString("pt-BR") : "-";
+      const velocidadeDia = (Number(p["Últimos 15 dias"] || 0) / 15).toFixed(1);
+      return `<tr>
+        <td class="sku-cell">${escapeHtml(p["SKUs"])}</td>
+        <td>${escapeHtml(p["Fornecedor"] ?? "-")}</td>
+        <td class="num">${fmtNum(p["Estoque AnyMarket disponível"])}</td>
+        <td class="num">${velocidadeDia}</td>
+        <td class="num"><span class="badge badge--${urgencia}">${dias}d</span></td>
+        <td>${previsao}</td>
+      </tr>`;
+    }).join("");
   }
 
   function renderKpis() {
@@ -399,6 +432,38 @@
     const seta = pct >= 0 ? '▲' : '▼';
     deltaEl.textContent = `${seta} ${Math.abs(pct).toFixed(0)}% vs média`;
     deltaEl.className = 'hero__caption ' + (pct >= 0 ? 'up' : 'down');
+  }
+
+  function renderTendencia() {
+    const comVenda = state.produtos.filter((p) => Number(p["Últimos 30 dias"] || 0) > 0);
+    const subindo = [], estavel = [], caindo = [];
+    comVenda.forEach((p) => {
+      const evol = Number(p["Evolução últimos 30 dias"] || 0);
+      if (evol > 0.10) subindo.push(p);
+      else if (evol < -0.10) caindo.push(p);
+      else estavel.push(p);
+    });
+    subindo.sort((a, b) => Number(b["Evolução últimos 30 dias"]) - Number(a["Evolução últimos 30 dias"]));
+    caindo.sort((a, b) => Number(a["Evolução últimos 30 dias"]) - Number(b["Evolução últimos 30 dias"]));
+    estavel.sort((a, b) => Number(b["Últimos 30 dias"]) - Number(a["Últimos 30 dias"]));
+
+    const card = (titulo, cls, lista) => `
+      <div class="tend-card tend-card--${cls}">
+        <div class="tend-card__head">
+          <span class="tend-card__title">${titulo}</span>
+          <span class="tend-card__count">${lista.length}</span>
+        </div>
+        ${lista.slice(0, 5).map((p) => `
+          <div class="tend-item">
+            <span class="tend-item__sku">${escapeHtml(p["SKUs"])}</span>
+            <span class="tend-item__pct ${cls === "down" ? "down" : cls === "up" ? "up" : ""}">${fmtPct(p["Evolução últimos 30 dias"])}</span>
+          </div>`).join("") || `<p class="muted" style="font-size:12px;">Nenhum produto aqui.</p>`}
+      </div>`;
+
+    document.getElementById("tendenciaRow").innerHTML =
+      card("📈 Subindo (30d)", "up", subindo) +
+      card("➡️ Estável (30d)", "flat", estavel) +
+      card("📉 Caindo (30d)", "down", caindo);
   }
 
   // ---------------------------------------------------------------- events

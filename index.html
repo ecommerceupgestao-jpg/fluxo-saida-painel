@@ -80,61 +80,90 @@
     <h2 class="section-title">Visão geral dos produtos</h2>
     <section class="kpi-row" id="kpiRow" aria-label="Resumo por diretriz"></section>
 
-    <h2 class="section-title">Financeiro</h2>
-    <section class="panel financeiro">
-      <div class="panel__header">
-        <div class="toggle-group" id="financeiroToggle">
-          <button type="button" class="toggle-btn active" data-view="mensal">Mensal</button>
-          <button type="button" class="toggle-btn" data-view="diario">Diário</button>
-        </div>
-      </div>
-      <div class="fin-kpi-row" id="finKpiRow"></div>
-      <canvas id="financeiroChart" height="140"></canvas>
-    </section>
+    <section class="tendencia" id="tendenciaRow" aria-label="Tendência de vendas"></section>
 
-    <h2 class="section-title">Produtos</h2>
-    <section class="panel filters">
-      <input type="search" id="searchInput" placeholder="Buscar por SKU, fornecedor ou categoria…" class="search-input">
-      <div class="chip-group" id="diretrizFilters" aria-label="Filtrar por diretriz"></div>
-      <div class="chip-group" id="classifFilters" aria-label="Filtrar por classificação"></div>
-    </section>
-
-    <section class="grid-2">
-      <div class="panel">
-        <h2 class="panel__title">Saída diária — últimos 30 dias</h2>
-        <canvas id="dailyChart" height="180"></canvas>
-      </div>
-      <div class="panel">
-        <h2 class="panel__title">Saída mensal — últimos 12 meses</h2>
-        <canvas id="monthlyChart" height="180"></canvas>
-      </div>
-    </section>
-
+    <h2 class="section-title">Risco de ruptura de estoque</h2>
     <section class="panel">
       <div class="panel__header">
-        <h2 class="panel__title">Lista completa <span id="rowCount" class="muted"></span></h2>
+        <h2 class="panel__title">Vai faltar em breve <span class="muted">(baseado na velocidade de venda dos últimos 15 dias)</span></h2>
       </div>
       <div class="table-wrap">
-        <table id="productsTable">
+        <table id="rupturaTable">
           <thead>
             <tr>
-              <th data-key="SKUs">SKU</th>
-              <th data-key="Fornecedor">Fornecedor</th>
-              <th data-key="Categorias">Categoria</th>
-              <th data-key="Preço Atual" class="num">Preço</th>
-              <th data-key="Estoque WMS" class="num">Estoque WMS</th>
-              <th data-key="Últimos 7 dias" class="num">7 dias</th>
-              <th data-key="Últimos 15 dias" class="num">15 dias</th>
-              <th data-key="Últimos 30 dias" class="num">30 dias</th>
-              <th data-key="Evolução últimos 30 dias" class="num">Evol. 30d</th>
-              <th data-key="Classificação">Classificação</th>
-              <th data-key="DIRETRIZ">DIRETRIZ</th>
+              <th>SKU</th>
+              <th>Fornecedor</th>
+              <th class="num">Estoque atual</th>
+              <th class="num">Vendas/dia</th>
+              <th class="num">Dias até faltar</th>
+              <th>Previsão</th>
             </tr>
           </thead>
-          <tbody id="productsBody"></tbody>
+          <tbody id="rupturaBody"></tbody>
         </table>
       </div>
     </section>
+
+    <details class="collapsible">
+      <summary>💰 Financeiro <span class="muted">— clique para ver entradas, saídas e margem</span></summary>
+      <section class="panel financeiro">
+        <div class="panel__header">
+          <div class="toggle-group" id="financeiroToggle">
+            <button type="button" class="toggle-btn active" data-view="mensal">Mensal</button>
+            <button type="button" class="toggle-btn" data-view="diario">Diário</button>
+          </div>
+        </div>
+        <div class="fin-kpi-row" id="finKpiRow"></div>
+        <canvas id="financeiroChart" height="140"></canvas>
+      </section>
+    </details>
+
+    <details class="collapsible">
+      <summary>📋 Lista completa de produtos <span class="muted">— busca, filtros e gráficos de saída</span></summary>
+
+      <section class="panel filters">
+        <input type="search" id="searchInput" placeholder="Buscar por SKU, fornecedor ou categoria…" class="search-input">
+        <div class="chip-group" id="diretrizFilters" aria-label="Filtrar por diretriz"></div>
+        <div class="chip-group" id="classifFilters" aria-label="Filtrar por classificação"></div>
+      </section>
+
+      <section class="grid-2">
+        <div class="panel">
+          <h2 class="panel__title">Saída diária — últimos 30 dias</h2>
+          <canvas id="dailyChart" height="180"></canvas>
+        </div>
+        <div class="panel">
+          <h2 class="panel__title">Saída mensal — últimos 12 meses</h2>
+          <canvas id="monthlyChart" height="180"></canvas>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h2 class="panel__title">Lista completa <span id="rowCount" class="muted"></span></h2>
+        </div>
+        <div class="table-wrap">
+          <table id="productsTable">
+            <thead>
+              <tr>
+                <th data-key="SKUs">SKU</th>
+                <th data-key="Fornecedor">Fornecedor</th>
+                <th data-key="Categorias">Categoria</th>
+                <th data-key="Preço Atual" class="num">Preço</th>
+                <th data-key="Estoque WMS" class="num">Estoque WMS</th>
+                <th data-key="Últimos 7 dias" class="num">7 dias</th>
+                <th data-key="Últimos 15 dias" class="num">15 dias</th>
+                <th data-key="Últimos 30 dias" class="num">30 dias</th>
+                <th data-key="Evolução últimos 30 dias" class="num">Evol. 30d</th>
+                <th data-key="Classificação">Classificação</th>
+                <th data-key="DIRETRIZ">DIRETRIZ</th>
+              </tr>
+            </thead>
+            <tbody id="productsBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </details>
 
   </section>
 </main>

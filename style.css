@@ -165,6 +165,40 @@ main { padding: 24px 28px 60px; max-width: 1280px; margin: 0 auto; }
 .price-promo { color: var(--saida); font-weight: 700; }
 .price-normal { font-weight: 600; }
 
+/* ---------- tendência ---------- */
+.tendencia { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+@media (max-width: 860px) { .tendencia { grid-template-columns: 1fr; } }
+.tend-card {
+  border-radius: var(--radius); padding: 14px 16px; border: 1px solid var(--border); background: #fff;
+}
+.tend-card__head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.tend-card__title { font-size: 13px; font-weight: 700; }
+.tend-card__count { font-family: var(--font-mono); font-size: 20px; font-weight: 600; }
+.tend-card--up { border-top: 3px solid var(--manutencao); }
+.tend-card--flat { border-top: 3px solid var(--ignorar); }
+.tend-card--down { border-top: 3px solid var(--saida); }
+.tend-item {
+  display: flex; justify-content: space-between; font-size: 12.5px; padding: 5px 0;
+  border-bottom: 1px solid #F1F2F4;
+}
+.tend-item:last-child { border-bottom: none; }
+.tend-item__sku { font-family: var(--font-mono); font-weight: 600; }
+.tend-item__pct.up { color: var(--manutencao); }
+.tend-item__pct.down { color: var(--saida); }
+
+/* ---------- collapsible sections ---------- */
+.collapsible { border: none; }
+.collapsible summary {
+  cursor: pointer; list-style: none; font-size: 13px; font-weight: 700; padding: 12px 16px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.collapsible summary::-webkit-details-marker { display: none; }
+.collapsible summary::before { content: "▸"; color: var(--ink-muted); font-size: 11px; }
+.collapsible[open] summary::before { content: "▾"; }
+.collapsible[open] summary { border-radius: var(--radius) var(--radius) 0 0; border-bottom: none; }
+.collapsible > *:not(summary) { margin-top: 16px; }
+
 /* ---------- hero (hoje) ---------- */
 .hero {
   background: linear-gradient(135deg, #1B2547 0%, #2B3A67 100%);
