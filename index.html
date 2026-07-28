@@ -82,6 +82,9 @@
 
     <section class="tendencia" id="tendenciaRow" aria-label="Tendência de vendas"></section>
 
+    <h2 class="section-title">Curva ABC <span class="muted">(por faturamento, últimos 12 meses)</span></h2>
+    <section class="abc-row" id="abcRow" aria-label="Curva ABC"></section>
+
     <h2 class="section-title">Risco de ruptura de estoque</h2>
     <section class="panel">
       <div class="panel__header">
@@ -129,7 +132,14 @@
 
       <section class="grid-2">
         <div class="panel">
-          <h2 class="panel__title">Saída diária — últimos 30 dias</h2>
+          <div class="panel__header">
+            <h2 class="panel__title">Saída por período</h2>
+            <div class="toggle-group" id="periodoToggle">
+              <button type="button" class="toggle-btn active" data-periodo="dia">Dia</button>
+              <button type="button" class="toggle-btn" data-periodo="semana">Semana</button>
+              <button type="button" class="toggle-btn" data-periodo="mes">Mês</button>
+            </div>
+          </div>
           <canvas id="dailyChart" height="180"></canvas>
         </div>
         <div class="panel">
@@ -155,6 +165,8 @@
                 <th data-key="Últimos 15 dias" class="num">15 dias</th>
                 <th data-key="Últimos 30 dias" class="num">30 dias</th>
                 <th data-key="Evolução últimos 30 dias" class="num">Evol. 30d</th>
+                <th data-key="_fat_rs" class="num">Faturamento 12M</th>
+                <th data-key="_lucro_rs" class="num">Lucro 12M</th>
                 <th data-key="Classificação">Classificação</th>
                 <th data-key="DIRETRIZ">DIRETRIZ</th>
               </tr>
@@ -165,12 +177,33 @@
       </section>
     </details>
 
+    <details class="collapsible">
+      <summary>🧾 Transações <span class="muted">— cada venda, com opção de agrupar por SKU</span></summary>
+      <section class="panel">
+        <div class="panel__header">
+          <h2 class="panel__title">Vendas <span id="transCount" class="muted"></span></h2>
+          <div class="toggle-group" id="transToggle">
+            <button type="button" class="toggle-btn active" data-modo="detalhado">Detalhado</button>
+            <button type="button" class="toggle-btn" data-modo="agrupado">Agrupado por SKU</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="transTable">
+            <thead>
+              <tr id="transHead"></tr>
+            </thead>
+            <tbody id="transBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </details>
+
   </section>
 </main>
 
 <template id="rowDetailTemplate">
   <tr class="row-detail">
-    <td colspan="11">
+    <td colspan="13">
       <canvas class="sparkline" height="60"></canvas>
     </td>
   </tr>

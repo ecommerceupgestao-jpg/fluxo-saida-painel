@@ -29,7 +29,11 @@
     saida_mensal: [],
     financeiro_diario: [],
     financeiro_mensal: [],
+    curva_abc: [],
+    transacoes: [],
     financeiroView: "mensal",
+    periodoView: "dia",
+    transModo: "detalhado",
     sortKey: "Últimos 30 dias",
     sortDir: "desc",
     search: "",
@@ -103,6 +107,19 @@
       state.saida_mensal = data.saida_mensal || [];
       state.financeiro_diario = data.financeiro_diario || [];
       state.financeiro_mensal = data.financeiro_mensal || [];
+      state.curva_abc = data.curva_abc || [];
+      state.transacoes = data.transacoes || [];
+
+      // Junta o Faturamento/Lucro em R$ (da Curva ABC) em cada produto,
+      // pra mostrar valor real ao lado da nota A/B/C.
+      const abcBySku = {};
+      state.curva_abc.forEach((c) => { abcBySku[c["SKU"]] = c; });
+      state.produtos.forEach((p) => {
+        const c = abcBySku[p["SKUs"]];
+        p["_fat_rs"] = c ? Number(c["Faturamento 12M"] || 0) : 0;
+        p["_lucro_rs"] = c ? Number(c["Lucro 12M"] || 0) : 0;
+      });
+
       setSyncStatus("ok", data.gerado_em);
       render();
     } catch (err) {
@@ -138,12 +155,35 @@
     showDashboard();
     renderHero();
     renderKpis();
+    renderAbc();
     renderTendencia();
     renderRuptura();
     renderFinanceiro();
     renderFilters();
     renderTable();
     renderCharts();
+    renderTransacoes();
+  }
+
+  function renderAbc() {
+    const total = state.curva_abc.reduce((s, c) => s + Number(c["Faturamento 12M"] || 0), 0);
+    const grupos = { A: [], B: [], C: [] };
+    state.curva_abc.forEach((c) => {
+      const g = c["Grade Faturamento"];
+      if (grupos[g]) grupos[g].push(c);
+    });
+    document.getElementById("abcRow").innerHTML = ["A", "B", "C"].map((letra) => {
+      const lista = grupos[letra];
+      const soma = lista.reduce((s, c) => s + Number(c["Faturamento 12M"] || 0), 0);
+      const pct = total ? (soma / total) * 100 : 0;
+      return `
+        <div class="abc-card abc-card--${letra}">
+          <div class="abc-card__letter">Curva ${letra}</div>
+          <div class="abc-card__count">${lista.length} produto(s)</div>
+          <div class="abc-card__pct">${pct.toFixed(1)}%</div>
+          <div class="abc-card__pct-label">do faturamento (12M) · ${fmtMoney(soma)}</div>
+        </div>`;
+    }).join("");
   }
 
   function renderRuptura() {
@@ -270,6 +310,8 @@
         <td class="num">${fmtNum(p["Últimos 15 dias"])}</td>
         <td class="num">${fmtNum(p["Últimos 30 dias"])}</td>
         <td class="num">${fmtPct(p["Evolução últimos 30 dias"])}</td>
+        <td class="num">${fmtMoney(p["_fat_rs"])}</td>
+        <td class="num">${fmtMoney(p["_lucro_rs"])}</td>
         <td>${badge(p["Classificação"], "classif")}</td>
         <td>${badge(p["DIRETRIZ"])}</td>
       </tr>`).join("");
@@ -308,22 +350,55 @@
   }
 
   function renderCharts() {
-    const dailyTotals = aggregateSeries(state.saida_diaria);
+    renderDailyChart();
+
     const monthlyTotals = aggregateSeries(state.saida_mensal);
-
-    if (dailyChart) dailyChart.destroy();
     if (monthlyChart) monthlyChart.destroy();
-
-    dailyChart = new Chart(document.getElementById("dailyChart"), {
-      type: "bar",
-      data: { labels: dailyTotals.labels, datasets: [{ data: dailyTotals.values, backgroundColor: "#2F6FED" }] },
-      options: chartOptions(),
-    });
     monthlyChart = new Chart(document.getElementById("monthlyChart"), {
       type: "bar",
       data: { labels: monthlyTotals.labels, datasets: [{ data: monthlyTotals.values, backgroundColor: "#1E9E62" }] },
       options: chartOptions(),
     });
+  }
+
+  function renderDailyChart() {
+    let labels, values;
+    if (state.periodoView === "mes") {
+      const m = aggregateSeries(state.saida_mensal);
+      labels = m.labels; values = m.values;
+    } else if (state.periodoView === "semana") {
+      const w = aggregateSemanal_(state.saida_diaria);
+      labels = w.labels; values = w.values;
+    } else {
+      const d = aggregateSeries(state.saida_diaria);
+      labels = d.labels; values = d.values;
+    }
+    if (dailyChart) dailyChart.destroy();
+    dailyChart = new Chart(document.getElementById("dailyChart"), {
+      type: "bar",
+      data: { labels, datasets: [{ data: values, backgroundColor: "#2F6FED" }] },
+      options: chartOptions(),
+    });
+  }
+
+  // Agrupa a série diária (30 dias) em blocos de 7 dias (~4-5 semanas),
+  // já que não existe uma aba "Semana" separada na planilha.
+  function aggregateSemanal_(saidaDiaria) {
+    if (!saidaDiaria.length) return { labels: [], values: [] };
+    const nDias = saidaDiaria[0].serie.length;
+    const totalPorDia = new Array(nDias).fill(0);
+    saidaDiaria.forEach((item) => item.serie.forEach((s, i) => { totalPorDia[i] += Number(s.quantidade) || 0; }));
+
+    const labels = [], values = [];
+    for (let inicio = 0; inicio < nDias; inicio += 7) {
+      const fim = Math.min(inicio + 7, nDias);
+      const soma = totalPorDia.slice(inicio, fim).reduce((s, v) => s + v, 0);
+      const dataInicio = (saidaDiaria[0].serie[inicio].periodo || "").slice(5);
+      const dataFim = (saidaDiaria[0].serie[fim - 1].periodo || "").slice(5);
+      labels.push(`${dataInicio}–${dataFim}`);
+      values.push(soma);
+    }
+    return { labels, values };
   }
 
   function chartOptions() {
@@ -494,6 +569,68 @@
     els.settingsDialog.close();
     fetchData();
   });
+
+  document.getElementById("periodoToggle").addEventListener("click", (e) => {
+    const btn = e.target.closest(".toggle-btn");
+    if (!btn) return;
+    document.querySelectorAll("#periodoToggle .toggle-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.periodoView = btn.dataset.periodo;
+    renderDailyChart();
+  });
+
+  document.getElementById("transToggle").addEventListener("click", (e) => {
+    const btn = e.target.closest(".toggle-btn");
+    if (!btn) return;
+    document.querySelectorAll("#transToggle .toggle-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.transModo = btn.dataset.modo;
+    renderTransacoes();
+  });
+
+  function renderTransacoes() {
+    const head = document.getElementById("transHead");
+    const body = document.getElementById("transBody");
+    const count = document.getElementById("transCount");
+    const skuInfo = {};
+    state.produtos.forEach((p) => { skuInfo[p["SKUs"]] = p["Fornecedor"]; });
+
+    if (state.transModo === "detalhado") {
+      head.innerHTML = `<th>Data</th><th>SKU</th><th>Fornecedor</th><th class="num">Qtd</th><th class="num">Faturamento</th><th class="num">Lucro</th>`;
+      const linhas = [...state.transacoes].sort((a, b) => (a.data < b.data ? 1 : -1));
+      count.textContent = `(${linhas.length})`;
+      body.innerHTML = linhas.map((t) => `
+        <tr>
+          <td>${(t.data || "").slice(0, 10).split("-").reverse().join("/")}</td>
+          <td class="sku-cell">${escapeHtml(t.sku)}</td>
+          <td>${escapeHtml(skuInfo[t.sku] ?? "-")}</td>
+          <td class="num">${fmtNum(t.quantidade)}</td>
+          <td class="num">${fmtMoney(t.faturamento)}</td>
+          <td class="num">${fmtMoney(t.lucro)}</td>
+        </tr>`).join("");
+    } else {
+      head.innerHTML = `<th>SKU</th><th>Fornecedor</th><th class="num">Qtd total</th><th class="num">Faturamento total</th><th class="num">Lucro total</th><th class="num"># vendas</th>`;
+      const grupos = {};
+      state.transacoes.forEach((t) => {
+        if (!grupos[t.sku]) grupos[t.sku] = { sku: t.sku, quantidade: 0, faturamento: 0, lucro: 0, n: 0 };
+        grupos[t.sku].quantidade += Number(t.quantidade) || 0;
+        grupos[t.sku].faturamento += Number(t.faturamento) || 0;
+        grupos[t.sku].lucro += Number(t.lucro) || 0;
+        grupos[t.sku].n += 1;
+      });
+      const linhas = Object.values(grupos).sort((a, b) => b.faturamento - a.faturamento);
+      count.textContent = `(${linhas.length} SKUs)`;
+      body.innerHTML = linhas.map((g) => `
+        <tr>
+          <td class="sku-cell">${escapeHtml(g.sku)}</td>
+          <td>${escapeHtml(skuInfo[g.sku] ?? "-")}</td>
+          <td class="num">${fmtNum(g.quantidade)}</td>
+          <td class="num">${fmtMoney(g.faturamento)}</td>
+          <td class="num">${fmtMoney(g.lucro)}</td>
+          <td class="num">${g.n}</td>
+        </tr>`).join("");
+    }
+  }
 
   // ---------------------------------------------------------------- init
   fetchData();
