@@ -141,7 +141,30 @@ main { padding: 24px 28px 60px; max-width: 1280px; margin: 0 auto; }
 }
 .chip.active { color: #fff; border-color: transparent; }
 
-/* ---------- table ---------- */
+/* ---------- financeiro ---------- */
+.financeiro .panel__header { margin-bottom: 16px; }
+.toggle-group { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.toggle-btn {
+  border: none; background: #fff; padding: 6px 14px; font-size: 12.5px; font-weight: 600;
+  color: var(--ink-muted); cursor: pointer;
+}
+.toggle-btn.active { background: var(--brand); color: #fff; }
+.fin-kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+@media (max-width: 860px) { .fin-kpi-row { grid-template-columns: repeat(2, 1fr); } }
+.fin-kpi {
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.fin-kpi__value { font-family: var(--font-mono); font-size: 22px; font-weight: 600; }
+.fin-kpi__label { font-size: 12px; font-weight: 600; color: var(--ink-muted); }
+.fin-kpi--in .fin-kpi__value { color: var(--manutencao); }
+.fin-kpi--out .fin-kpi__value { color: var(--saida); }
+.fin-kpi--profit .fin-kpi__value { color: var(--foco); }
+
+.price-orig { text-decoration: line-through; color: var(--ink-muted); font-size: 11px; }
+.price-promo { color: var(--saida); font-weight: 700; }
+.price-normal { font-weight: 600; }
+
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 thead th {

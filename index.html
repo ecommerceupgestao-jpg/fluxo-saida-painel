@@ -57,6 +57,18 @@
 
     <section class="kpi-row" id="kpiRow" aria-label="Resumo por diretriz"></section>
 
+    <section class="panel financeiro">
+      <div class="panel__header">
+        <h2 class="panel__title">Financeiro</h2>
+        <div class="toggle-group" id="financeiroToggle">
+          <button type="button" class="toggle-btn active" data-view="mensal">Mensal</button>
+          <button type="button" class="toggle-btn" data-view="diario">Diário</button>
+        </div>
+      </div>
+      <div class="fin-kpi-row" id="finKpiRow"></div>
+      <canvas id="financeiroChart" height="140"></canvas>
+    </section>
+
     <section class="panel filters">
       <input type="search" id="searchInput" placeholder="Buscar por SKU, fornecedor ou categoria…" class="search-input">
       <div class="chip-group" id="diretrizFilters" aria-label="Filtrar por diretriz"></div>
@@ -82,11 +94,13 @@
         <table id="productsTable">
           <thead>
             <tr>
-              <th data-key="SKU">SKU</th>
+              <th data-key="SKUs">SKU</th>
               <th data-key="Fornecedor">Fornecedor</th>
               <th data-key="Categorias">Categoria</th>
+              <th data-key="Preço Atual" class="num">Preço</th>
               <th data-key="Estoque WMS" class="num">Estoque WMS</th>
               <th data-key="Últimos 7 dias" class="num">7 dias</th>
+              <th data-key="Últimos 15 dias" class="num">15 dias</th>
               <th data-key="Últimos 30 dias" class="num">30 dias</th>
               <th data-key="Evolução últimos 30 dias" class="num">Evol. 30d</th>
               <th data-key="Classificação">Classificação</th>
@@ -103,7 +117,7 @@
 
 <template id="rowDetailTemplate">
   <tr class="row-detail">
-    <td colspan="9">
+    <td colspan="11">
       <canvas class="sparkline" height="60"></canvas>
     </td>
   </tr>

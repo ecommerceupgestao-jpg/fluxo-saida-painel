@@ -27,6 +27,9 @@
     produtos: [],
     saida_diaria: [],
     saida_mensal: [],
+    financeiro_diario: [],
+    financeiro_mensal: [],
+    financeiroView: "mensal",
     sortKey: "Últimos 30 dias",
     sortDir: "desc",
     search: "",
@@ -34,7 +37,7 @@
     classifFiltro: new Set(),
   };
 
-  let dailyChart, monthlyChart;
+  let dailyChart, monthlyChart, financeiroChart;
 
   function loadConfig() {
     try {
@@ -77,6 +80,11 @@
     return (Number(n) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%";
   }
 
+  function fmtMoney(n) {
+    if (n === null || n === undefined || n === "") return "-";
+    return Number(n).toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+  }
+
   // ---------------------------------------------------------------- fetch
   async function fetchData() {
     const cfg = loadConfig();
@@ -93,6 +101,8 @@
       state.produtos = data.produtos || [];
       state.saida_diaria = data.saida_diaria || [];
       state.saida_mensal = data.saida_mensal || [];
+      state.financeiro_diario = data.financeiro_diario || [];
+      state.financeiro_mensal = data.financeiro_mensal || [];
       setSyncStatus("ok", data.gerado_em);
       render();
     } catch (err) {
@@ -127,6 +137,7 @@
     if (!state.produtos.length) { showEmpty(); return; }
     showDashboard();
     renderKpis();
+    renderFinanceiro();
     renderFilters();
     renderTable();
     renderCharts();
@@ -183,7 +194,7 @@
     const term = state.search.trim().toLowerCase();
     let rows = state.produtos.filter((p) => {
       if (term) {
-        const hay = `${p["SKU"] ?? ""} ${p["Fornecedor"] ?? ""} ${p["Categorias"] ?? ""}`.toLowerCase();
+        const hay = `${p["SKUs"] ?? ""} ${p["Fornecedor"] ?? ""} ${p["Categorias"] ?? ""}`.toLowerCase();
         if (!hay.includes(term)) return false;
       }
       if (state.diretrizFiltro.size && !state.diretrizFiltro.has(p["DIRETRIZ"])) return false;
@@ -201,16 +212,28 @@
     return rows;
   }
 
+  function fmtPrecoComPromo(precoOriginal, precoAtual) {
+    const orig = Number(precoOriginal || 0);
+    const atual = Number(precoAtual || 0);
+    if (!atual) return "-";
+    if (orig > atual + 0.005) {
+      return `<span class="price-orig">${fmtMoney(orig)}</span><br><span class="price-promo">${fmtMoney(atual)}</span>`;
+    }
+    return `<span class="price-normal">${fmtMoney(atual)}</span>`;
+  }
+
   function renderTable() {
     const rows = filteredSortedProducts();
     els.rowCount.textContent = `(${rows.length})`;
     els.productsBody.innerHTML = rows.map((p, i) => `
       <tr class="data-row" data-idx="${i}">
-        <td class="sku-cell">${escapeHtml(p["SKU"])}</td>
+        <td class="sku-cell">${escapeHtml(p["SKUs"])}</td>
         <td>${escapeHtml(p["Fornecedor"] ?? "-")}</td>
         <td>${escapeHtml(p["Categorias"] ?? "-")}</td>
+        <td class="num">${fmtPrecoComPromo(p["Preço Original"], p["Preço Atual"])}</td>
         <td class="num">${fmtNum(p["Estoque WMS"])}</td>
         <td class="num">${fmtNum(p["Últimos 7 dias"])}</td>
+        <td class="num">${fmtNum(p["Últimos 15 dias"])}</td>
         <td class="num">${fmtNum(p["Últimos 30 dias"])}</td>
         <td class="num">${fmtPct(p["Evolução últimos 30 dias"])}</td>
         <td>${badge(p["Classificação"], "classif")}</td>
@@ -232,7 +255,7 @@
     const detailRow = tr.nextElementSibling;
     const canvas = detailRow.querySelector("canvas");
 
-    const serie = (state.saida_diaria.find((d) => d.sku === product["SKU"]) || {}).serie || [];
+    const serie = (state.saida_diaria.find((d) => d.sku === product["SKUs"]) || {}).serie || [];
     new Chart(canvas, {
       type: "line",
       data: {
@@ -244,7 +267,7 @@
         }],
       },
       options: {
-        plugins: { legend: { display: false }, title: { display: true, text: `Saída diária — ${product["SKU"]}`, font: { size: 11 } } },
+        plugins: { legend: { display: false }, title: { display: true, text: `Saída diária — ${product["SKUs"]}`, font: { size: 11 } } },
         scales: { x: { ticks: { font: { size: 9 } } }, y: { ticks: { font: { size: 9 } }, beginAtZero: true } },
       },
     });
@@ -284,6 +307,64 @@
     list.forEach((item) => item.serie.forEach((s, i) => { values[i] += Number(s.quantidade) || 0; }));
     return { labels, values };
   }
+
+  function renderFinanceiro() {
+    const serie = state.financeiroView === "mensal" ? state.financeiro_mensal : state.financeiro_diario;
+    const totais = serie.reduce((acc, p) => ({
+      faturamento: acc.faturamento + Number(p.faturamento || 0),
+      custo: acc.custo + Number(p.custo || 0),
+      taxa: acc.taxa + Number(p.taxa_ml || 0),
+      frete: acc.frete + Number(p.frete || 0),
+      ads: acc.ads + Number(p.gasto_ads || 0),
+      lucro: acc.lucro + Number(p.lucro_liquido || 0),
+    }), { faturamento: 0, custo: 0, taxa: 0, frete: 0, ads: 0, lucro: 0 });
+    const totalSaidas = totais.custo + totais.taxa + totais.frete + totais.ads;
+    const margem = totais.faturamento ? (totais.lucro / totais.faturamento) : 0;
+
+    document.getElementById("finKpiRow").innerHTML = `
+      <div class="fin-kpi fin-kpi--in">
+        <span class="fin-kpi__value">${fmtMoney(totais.faturamento)}</span>
+        <span class="fin-kpi__label">Entradas (faturamento)</span>
+      </div>
+      <div class="fin-kpi fin-kpi--out">
+        <span class="fin-kpi__value">${fmtMoney(totalSaidas)}</span>
+        <span class="fin-kpi__label">Saídas (produto + taxa ML + frete + ads)</span>
+      </div>
+      <div class="fin-kpi fin-kpi--profit">
+        <span class="fin-kpi__value">${fmtMoney(totais.lucro)}</span>
+        <span class="fin-kpi__label">Lucro líquido (após ads)</span>
+      </div>
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtPct(margem)}</span>
+        <span class="fin-kpi__label">Margem líquida</span>
+      </div>`;
+
+    if (financeiroChart) financeiroChart.destroy();
+    financeiroChart = new Chart(document.getElementById("financeiroChart"), {
+      type: "bar",
+      data: {
+        labels: serie.map((p) => (p.periodo || "").slice(state.financeiroView === "mensal" ? 0 : 5)),
+        datasets: [
+          { label: "Faturamento", data: serie.map((p) => p.faturamento), backgroundColor: "#1E9E62" },
+          { label: "Custo + Taxas + Frete + Ads", data: serie.map((p) => Number(p.custo || 0) + Number(p.taxa_ml || 0) + Number(p.frete || 0) + Number(p.gasto_ads || 0)), backgroundColor: "#D63C3C" },
+          { label: "Lucro líquido", data: serie.map((p) => p.lucro_liquido), type: "line", borderColor: "#2F6FED", backgroundColor: "transparent", tension: 0.3, pointRadius: 2 },
+        ],
+      },
+      options: {
+        plugins: { legend: { display: true, position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } } },
+        scales: { x: { ticks: { font: { size: 10 } } }, y: { ticks: { font: { size: 10 } } } },
+      },
+    });
+  }
+
+  document.getElementById("financeiroToggle").addEventListener("click", (e) => {
+    const btn = e.target.closest(".toggle-btn");
+    if (!btn) return;
+    document.querySelectorAll("#financeiroToggle .toggle-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.financeiroView = btn.dataset.view;
+    renderFinanceiro();
+  });
 
   // ---------------------------------------------------------------- events
   document.querySelectorAll("#productsTable thead th").forEach((th) => {
