@@ -105,28 +105,40 @@
     </section>
 
     <h2 class="section-title">Estoque &amp; capital parado</h2>
-    <section class="panel">
-      <div class="panel__header">
-        <h2 class="panel__title">Quanto dinheiro está parado em estoque</h2>
-      </div>
-      <div class="fin-kpi-row" id="estoqueKpiRow"></div>
-      <div class="table-wrap">
-        <table id="estoqueTable">
-          <thead>
-            <tr>
-              <th>SKU</th>
-              <th class="num">Estoque</th>
-              <th class="num">Custo Unit.</th>
-              <th class="num">Valor parado</th>
-              <th class="num">Preço</th>
-              <th class="num">Margem</th>
-              <th class="num">Lucro potencial</th>
-            </tr>
-          </thead>
-          <tbody id="estoqueBody"></tbody>
-        </table>
-      </div>
-    </section>
+    <details class="collapsible" open>
+      <summary>📦 Quanto dinheiro está parado em estoque</summary>
+      <section class="panel">
+        <div class="fin-kpi-row" id="estoqueKpiRow"></div>
+      </section>
+      <details class="collapsible">
+        <summary>Ver tabela completa por produto</summary>
+        <section class="panel">
+          <div class="panel__header">
+            <h2 class="panel__title">Produtos</h2>
+            <label class="checkbox-label">
+              <input type="checkbox" id="semCustoFiltro"> Mostrar só sem custo preenchido
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table id="estoqueTable">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>SKU</th>
+                  <th class="num">Estoque</th>
+                  <th class="num">Custo Unit.</th>
+                  <th class="num">Valor parado</th>
+                  <th class="num">Preço</th>
+                  <th class="num">Margem</th>
+                  <th class="num">Lucro potencial</th>
+                </tr>
+              </thead>
+              <tbody id="estoqueBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </details>
+    </details>
 
     <h2 class="section-title">Visão geral dos produtos</h2>
     <section class="kpi-row" id="kpiRow" aria-label="Resumo por diretriz"></section>
@@ -207,6 +219,7 @@
           <table id="productsTable">
             <thead>
               <tr>
+                <th></th>
                 <th data-key="SKUs">SKU</th>
                 <th data-key="Fornecedor">Fornecedor</th>
                 <th data-key="Categorias">Categoria</th>
@@ -257,7 +270,7 @@
 
 <template id="rowDetailTemplate">
   <tr class="row-detail">
-    <td colspan="16">
+    <td colspan="17">
       <canvas class="sparkline" height="60"></canvas>
     </td>
   </tr>

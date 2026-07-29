@@ -213,8 +213,9 @@
   }
 
   function renderEstoque() {
+    const somenteSemCusto = document.getElementById("semCustoFiltro").checked;
     let totalParado = 0, totalPotencial = 0, totalLucroPotencial = 0;
-    const linhas = state.produtos.map((p) => {
+    let linhas = state.produtos.map((p) => {
       const estoque = Number(p["Estoque AnyMarket disponível"] || 0);
       const custo = Number(p["Custo Unitário"] || 0);
       const preco = Number(p["Preço Atual"] || 0);
@@ -225,7 +226,7 @@
       totalParado += valorParado;
       totalPotencial += valorPotencial;
       totalLucroPotencial += lucroPotencial;
-      return { sku: p["SKUs"], estoque, custo, valorParado, preco, margem, lucroPotencial };
+      return { sku: p["SKUs"], foto: p["Foto URL"], estoque, custo, valorParado, preco, margem, lucroPotencial };
     }).sort((a, b) => b.valorParado - a.valorParado);
 
     document.getElementById("estoqueKpiRow").innerHTML = `
@@ -242,16 +243,58 @@
         <span class="fin-kpi__label">Lucro potencial (na margem atual)</span>
       </div>`;
 
+    if (somenteSemCusto) linhas = linhas.filter((l) => !l.custo);
+
     document.getElementById("estoqueBody").innerHTML = linhas.map((l) => `
       <tr>
+        <td>${fmtFoto(l.foto)}</td>
         <td class="sku-cell">${escapeHtml(l.sku)}</td>
         <td class="num">${fmtNum(l.estoque)}</td>
-        <td class="num">${l.custo ? fmtMoney(l.custo) : '<span class="custo-faltando">sem custo</span>'}</td>
+        <td class="num">
+          <input type="number" step="0.01" min="0" class="custo-edit" data-sku="${escapeHtml(l.sku)}" value="${l.custo || ""}" placeholder="0,00">
+          <span class="custo-save-msg" data-sku-msg="${escapeHtml(l.sku)}"></span>
+        </td>
         <td class="num">${fmtMoney(l.valorParado)}</td>
         <td class="num">${fmtMoney(l.preco)}</td>
         <td class="num">${fmtPct(l.margem)}</td>
         <td class="num">${fmtMoney(l.lucroPotencial)}</td>
       </tr>`).join("");
+
+    document.querySelectorAll(".custo-edit").forEach((input) => {
+      input.addEventListener("change", () => salvarCusto_(input));
+    });
+  }
+
+  document.getElementById("semCustoFiltro").addEventListener("change", renderEstoque);
+
+  async function salvarCusto_(input) {
+    const sku = input.dataset.sku;
+    const custo = Number(input.value || 0);
+    const msg = document.querySelector(`[data-sku-msg="${sku}"]`);
+    const cfg = loadConfig();
+    input.classList.add("salvando");
+    msg.textContent = "";
+    msg.className = "custo-save-msg";
+    try {
+      const resp = await fetch(cfg.apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ token: cfg.apiToken, acao: "atualizar_custo", sku, custo }),
+      });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "erro");
+      msg.textContent = "✓ salvo";
+      msg.className = "custo-save-msg ok";
+      // Atualiza o valor localmente pra Capital Parado/Margem já refletirem sem esperar o próximo fetch automático.
+      const produto = state.produtos.find((p) => p["SKUs"] === sku);
+      if (produto) produto["Custo Unitário"] = custo;
+      renderEstoque();
+    } catch (err) {
+      msg.textContent = "✗ erro ao salvar";
+      msg.className = "custo-save-msg erro";
+    } finally {
+      input.classList.remove("salvando");
+    }
   }
 
   function renderAbc() {
@@ -394,11 +437,18 @@
     return `<span class="badge badge--${urgencia}">${n}d</span>`;
   }
 
+  function fmtFoto(url) {
+    return url
+      ? `<img src="${url}" class="produto-foto" loading="lazy" alt="" onerror="this.outerHTML='<span class=&quot;produto-foto produto-foto--vazia&quot;></span>'">`
+      : `<span class="produto-foto produto-foto--vazia"></span>`;
+  }
+
   function renderTable() {
     const rows = filteredSortedProducts();
     els.rowCount.textContent = `(${rows.length})`;
     els.productsBody.innerHTML = rows.map((p, i) => `
       <tr class="data-row" data-idx="${i}">
+        <td>${fmtFoto(p["Foto URL"])}</td>
         <td class="sku-cell">${escapeHtml(p["SKUs"])}</td>
         <td>${escapeHtml(p["Fornecedor"] ?? "-")}</td>
         <td>${escapeHtml(p["Categorias"] ?? "-")}</td>
