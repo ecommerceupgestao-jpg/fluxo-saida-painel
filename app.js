@@ -194,6 +194,8 @@
 
   function renderSaidaPorDia() {
     const idx = Number(document.getElementById("diaSelect").value || 0);
+    const fotoPorSku = {}, linkPorSku = {};
+    state.produtos.forEach((p) => { fotoPorSku[p["SKUs"]] = p["Foto URL"]; linkPorSku[p["SKUs"]] = p["Link Anúncio"]; });
     const linhas = state.saida_diaria
       .map((item) => ({ sku: item.sku, fornecedor: item.fornecedor, qtd: Number((item.serie[idx] || {}).quantidade || 0) }))
       .filter((l) => l.qtd > 0)
@@ -201,12 +203,13 @@
 
     const body = document.getElementById("diaBody");
     if (!linhas.length) {
-      body.innerHTML = `<tr><td colspan="3" class="muted" style="text-align:center;padding:16px;">Nenhuma venda nesse dia.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="4" class="muted" style="text-align:center;padding:16px;">Nenhuma venda nesse dia.</td></tr>`;
       return;
     }
     body.innerHTML = linhas.map((l) => `
       <tr>
-        <td class="sku-cell">${escapeHtml(l.sku)}</td>
+        <td>${fmtFoto(fotoPorSku[l.sku])}</td>
+        <td>${fmtSkuLink(l.sku, linkPorSku[l.sku])}</td>
         <td>${escapeHtml(l.fornecedor ?? "-")}</td>
         <td class="num">${fmtNum(l.qtd)}</td>
       </tr>`).join("");
@@ -226,7 +229,7 @@
       totalParado += valorParado;
       totalPotencial += valorPotencial;
       totalLucroPotencial += lucroPotencial;
-      return { sku: p["SKUs"], foto: p["Foto URL"], estoque, custo, valorParado, preco, margem, lucroPotencial };
+      return { sku: p["SKUs"], foto: p["Foto URL"], link: p["Link Anúncio"], estoque, custo, valorParado, preco, margem, lucroPotencial };
     }).sort((a, b) => b.valorParado - a.valorParado);
 
     document.getElementById("estoqueKpiRow").innerHTML = `
@@ -248,7 +251,7 @@
     document.getElementById("estoqueBody").innerHTML = linhas.map((l) => `
       <tr>
         <td>${fmtFoto(l.foto)}</td>
-        <td class="sku-cell">${escapeHtml(l.sku)}</td>
+        <td>${fmtSkuLink(l.sku, l.link)}</td>
         <td class="num">${fmtNum(l.estoque)}</td>
         <td class="num">
           <input type="number" step="0.01" min="0" class="custo-edit" data-sku="${escapeHtml(l.sku)}" value="${l.custo || ""}" placeholder="0,00">
@@ -437,6 +440,13 @@
     return `<span class="badge badge--${urgencia}">${n}d</span>`;
   }
 
+  function fmtSkuLink(sku, link) {
+    const texto = escapeHtml(sku);
+    return link
+      ? `<a href="${link}" target="_blank" rel="noopener" class="sku-cell sku-link">${texto}</a>`
+      : `<span class="sku-cell">${texto}</span>`;
+  }
+
   function fmtFoto(url) {
     return url
       ? `<img src="${url}" class="produto-foto" loading="lazy" alt="" onerror="this.outerHTML='<span class=&quot;produto-foto produto-foto--vazia&quot;></span>'">`
@@ -449,7 +459,7 @@
     els.productsBody.innerHTML = rows.map((p, i) => `
       <tr class="data-row" data-idx="${i}">
         <td>${fmtFoto(p["Foto URL"])}</td>
-        <td class="sku-cell">${escapeHtml(p["SKUs"])}</td>
+        <td>${fmtSkuLink(p["SKUs"], p["Link Anúncio"])}</td>
         <td>${escapeHtml(p["Fornecedor"] ?? "-")}</td>
         <td>${escapeHtml(p["Categorias"] ?? "-")}</td>
         <td class="num">${fmtPrecoComPromo(p["Preço Original"], p["Preço Atual"])}</td>

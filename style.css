@@ -348,7 +348,7 @@ td.sku-cell { font-family: var(--font-mono); font-weight: 600; }
 }
 
 /* ---------- foto do produto ---------- */
-.produto-foto { width: 32px; height: 32px; border-radius: 6px; object-fit: cover; background: var(--panel-2); display: block; }
+.produto-foto { width: 46px; height: 46px; border-radius: 6px; object-fit: cover; background: var(--panel-2); display: block; }
 .produto-foto--vazia { background: var(--panel-2); border: 1px dashed var(--border); }
 
 /* ---------- custo editável ---------- */
@@ -361,3 +361,7 @@ td.sku-cell { font-family: var(--font-mono); font-weight: 600; }
 .custo-save-msg { font-size: 10.5px; margin-left: 6px; }
 .custo-save-msg.ok { color: var(--manutencao); }
 .custo-save-msg.erro { color: var(--saida); }
+
+/* ---------- sku como link ---------- */
+.sku-link { color: var(--foco); text-decoration: none; }
+.sku-link:hover { text-decoration: underline; }
