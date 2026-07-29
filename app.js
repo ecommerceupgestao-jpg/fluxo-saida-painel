@@ -168,11 +168,90 @@
     renderAbc();
     renderTendencia();
     renderRuptura();
+    renderSaidaPorDiaSelect();
+    renderEstoque();
     renderFinanceiro();
     renderFilters();
     renderTable();
     renderCharts();
     renderTransacoes();
+  }
+
+  function renderSaidaPorDiaSelect() {
+    const sel = document.getElementById("diaSelect");
+    const serieRef = state.saida_diaria[0] ? state.saida_diaria[0].serie : [];
+    const jaTinhaValor = sel.value !== "";
+    sel.innerHTML = serieRef.map((s, i) => {
+      const label = (s.periodo || "").slice(5).split("-").reverse().join("/");
+      const isOntem = i === serieRef.length - 2;
+      return `<option value="${i}">${label}${isOntem ? " (ontem)" : i === serieRef.length - 1 ? " (hoje)" : ""}</option>`;
+    }).join("");
+    if (!jaTinhaValor && serieRef.length >= 2) sel.value = String(serieRef.length - 2); // padrão: ontem
+    renderSaidaPorDia();
+  }
+
+  document.getElementById("diaSelect").addEventListener("change", renderSaidaPorDia);
+
+  function renderSaidaPorDia() {
+    const idx = Number(document.getElementById("diaSelect").value || 0);
+    const linhas = state.saida_diaria
+      .map((item) => ({ sku: item.sku, fornecedor: item.fornecedor, qtd: Number((item.serie[idx] || {}).quantidade || 0) }))
+      .filter((l) => l.qtd > 0)
+      .sort((a, b) => b.qtd - a.qtd);
+
+    const body = document.getElementById("diaBody");
+    if (!linhas.length) {
+      body.innerHTML = `<tr><td colspan="3" class="muted" style="text-align:center;padding:16px;">Nenhuma venda nesse dia.</td></tr>`;
+      return;
+    }
+    body.innerHTML = linhas.map((l) => `
+      <tr>
+        <td class="sku-cell">${escapeHtml(l.sku)}</td>
+        <td>${escapeHtml(l.fornecedor ?? "-")}</td>
+        <td class="num">${fmtNum(l.qtd)}</td>
+      </tr>`).join("");
+  }
+
+  function renderEstoque() {
+    let totalParado = 0, totalPotencial = 0, totalLucroPotencial = 0;
+    const linhas = state.produtos.map((p) => {
+      const estoque = Number(p["Estoque AnyMarket disponível"] || 0);
+      const custo = Number(p["Custo Unitário"] || 0);
+      const preco = Number(p["Preço Atual"] || 0);
+      const margem = Number(p["_margem"] || 0);
+      const valorParado = estoque * custo;
+      const valorPotencial = estoque * preco;
+      const lucroPotencial = valorPotencial * margem;
+      totalParado += valorParado;
+      totalPotencial += valorPotencial;
+      totalLucroPotencial += lucroPotencial;
+      return { sku: p["SKUs"], estoque, custo, valorParado, preco, margem, lucroPotencial };
+    }).sort((a, b) => b.valorParado - a.valorParado);
+
+    document.getElementById("estoqueKpiRow").innerHTML = `
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtMoney(totalParado)}</span>
+        <span class="fin-kpi__label">Capital parado em estoque (custo)</span>
+      </div>
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtMoney(totalPotencial)}</span>
+        <span class="fin-kpi__label">Valor de venda potencial</span>
+      </div>
+      <div class="fin-kpi fin-kpi--profit">
+        <span class="fin-kpi__value">${fmtMoney(totalLucroPotencial)}</span>
+        <span class="fin-kpi__label">Lucro potencial (na margem atual)</span>
+      </div>`;
+
+    document.getElementById("estoqueBody").innerHTML = linhas.map((l) => `
+      <tr>
+        <td class="sku-cell">${escapeHtml(l.sku)}</td>
+        <td class="num">${fmtNum(l.estoque)}</td>
+        <td class="num">${l.custo ? fmtMoney(l.custo) : '<span class="custo-faltando">sem custo</span>'}</td>
+        <td class="num">${fmtMoney(l.valorParado)}</td>
+        <td class="num">${fmtMoney(l.preco)}</td>
+        <td class="num">${fmtPct(l.margem)}</td>
+        <td class="num">${fmtMoney(l.lucroPotencial)}</td>
+      </tr>`).join("");
   }
 
   function renderAbc() {
@@ -365,6 +444,8 @@
         }],
       },
       options: {
+        responsive: true,
+        maintainAspectRatio: false,
         plugins: { legend: { display: false }, title: { display: true, text: `Saída diária — ${product["SKUs"]}`, font: { size: 11 } } },
         scales: { x: { ticks: { font: { size: 9 } } }, y: { ticks: { font: { size: 9 } }, beginAtZero: true } },
       },
@@ -425,6 +506,8 @@
 
   function chartOptions() {
     return {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: { x: { ticks: { font: { size: 10 } } }, y: { beginAtZero: true, ticks: { font: { size: 10 } } } },
     };
@@ -482,6 +565,8 @@
         ],
       },
       options: {
+        responsive: true,
+        maintainAspectRatio: false,
         plugins: { legend: { display: true, position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } } },
         scales: { x: { ticks: { font: { size: 10 } } }, y: { ticks: { font: { size: 10 } } } },
       },

@@ -15,6 +15,7 @@
   <div class="topbar__brand">
     <img src="logo.jpg" alt="Teko" class="topbar__logo">
     <div>
+      <span class="topbar__brandname">TEKO</span>
       <h1>Fluxo de Saída</h1>
       <p class="topbar__sub">Painel do analista · classificação ABC &amp; diretriz de estoque</p>
     </div>
@@ -87,6 +88,44 @@
         </div>
       </div>
       <div id="metaContent"></div>
+    </section>
+
+    <h2 class="section-title">Saída por dia</h2>
+    <section class="panel">
+      <div class="panel__header">
+        <h2 class="panel__title">O que saiu em um dia específico</h2>
+        <select id="diaSelect" class="search-input" style="max-width:180px;flex:none;"></select>
+      </div>
+      <div class="table-wrap">
+        <table id="diaTable">
+          <thead><tr><th>SKU</th><th>Fornecedor</th><th class="num">Quantidade</th></tr></thead>
+          <tbody id="diaBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <h2 class="section-title">Estoque &amp; capital parado</h2>
+    <section class="panel">
+      <div class="panel__header">
+        <h2 class="panel__title">Quanto dinheiro está parado em estoque</h2>
+      </div>
+      <div class="fin-kpi-row" id="estoqueKpiRow"></div>
+      <div class="table-wrap">
+        <table id="estoqueTable">
+          <thead>
+            <tr>
+              <th>SKU</th>
+              <th class="num">Estoque</th>
+              <th class="num">Custo Unit.</th>
+              <th class="num">Valor parado</th>
+              <th class="num">Preço</th>
+              <th class="num">Margem</th>
+              <th class="num">Lucro potencial</th>
+            </tr>
+          </thead>
+          <tbody id="estoqueBody"></tbody>
+        </table>
+      </div>
     </section>
 
     <h2 class="section-title">Visão geral dos produtos</h2>
