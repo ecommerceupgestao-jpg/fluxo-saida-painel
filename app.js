@@ -859,6 +859,22 @@
     }
   }
 
+  document.getElementById("tabbar").addEventListener("click", (e) => {
+    const btn = e.target.closest(".tab-btn");
+    if (!btn) return;
+    const tab = btn.dataset.tab;
+    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("active", p.dataset.tab === tab));
+    // Reconstrói os gráficos da aba que acabou de aparecer — o Chart.js
+    // calcula o tamanho errado se for criado enquanto a aba está escondida.
+    if (tab === "produtos" && state.produtos.length) renderCharts();
+    if (tab === "financeiro" && state.produtos.length) renderFinanceiro();
+  });
+
+  document.getElementById("listaCompletaDetails").addEventListener("toggle", (e) => {
+    if (e.target.open && state.produtos.length) renderCharts();
+  });
+
   // ---------------------------------------------------------------- init
   fetchData();
   setInterval(fetchData, 60000); // atualiza sozinho a cada 1 min

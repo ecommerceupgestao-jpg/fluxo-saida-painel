@@ -56,60 +56,173 @@
 
   <section id="dashboard" class="dashboard hidden">
 
-    <section class="hero" id="heroToday" aria-label="Resumo de hoje">
-      <div class="hero__label"><span class="live-dot"></span>HOJE</div>
-      <div class="hero__grid">
-        <div class="hero__stat">
-          <span class="hero__value" id="heroFaturamento">—</span>
-          <span class="hero__caption" id="heroFaturamentoDelta"></span>
-          <span class="hero__label-small">Faturamento</span>
+    <nav class="tabbar" id="tabbar" aria-label="Seções do painel">
+      <button type="button" class="tab-btn active" data-tab="hoje">Hoje</button>
+      <button type="button" class="tab-btn" data-tab="produtos">Produtos</button>
+      <button type="button" class="tab-btn" data-tab="estoque">Estoque</button>
+      <button type="button" class="tab-btn" data-tab="financeiro">Financeiro</button>
+    </nav>
+
+    <!-- ==================================================== TAB: HOJE -->
+    <section class="tab-panel active" data-tab="hoje">
+
+      <section class="hero" id="heroToday" aria-label="Resumo de hoje">
+        <div class="hero__label"><span class="live-dot"></span>HOJE</div>
+        <div class="hero__grid">
+          <div class="hero__stat">
+            <span class="hero__value" id="heroFaturamento">—</span>
+            <span class="hero__caption" id="heroFaturamentoDelta"></span>
+            <span class="hero__label-small">Faturamento</span>
+          </div>
+          <div class="hero__stat">
+            <span class="hero__value" id="heroUnidades">—</span>
+            <span class="hero__caption" id="heroUnidadesDelta"></span>
+            <span class="hero__label-small">Unidades vendidas</span>
+          </div>
+          <div class="hero__stat">
+            <span class="hero__value" id="heroLucro">—</span>
+            <span class="hero__caption" id="heroLucroDelta"></span>
+            <span class="hero__label-small">Lucro</span>
+          </div>
         </div>
-        <div class="hero__stat">
-          <span class="hero__value" id="heroUnidades">—</span>
-          <span class="hero__caption" id="heroUnidadesDelta"></span>
-          <span class="hero__label-small">Unidades vendidas</span>
+        <p class="hero__footnote">comparado com a média dos últimos 7 dias</p>
+      </section>
+
+      <h2 class="section-title">Meta do mês</h2>
+      <section class="panel meta-panel" id="metaPanel">
+        <div class="panel__header">
+          <h2 class="panel__title">🎯 Meta de faturamento</h2>
+          <div class="meta-input-row">
+            <input type="number" id="metaInput" placeholder="Ex: 15000" class="search-input meta-input">
+            <button id="metaSaveBtn" class="btn btn--primary">Salvar</button>
+          </div>
         </div>
-        <div class="hero__stat">
-          <span class="hero__value" id="heroLucro">—</span>
-          <span class="hero__caption" id="heroLucroDelta"></span>
-          <span class="hero__label-small">Lucro</span>
-        </div>
-      </div>
-      <p class="hero__footnote">comparado com a média dos últimos 7 dias</p>
+        <div id="metaContent"></div>
+      </section>
+
     </section>
 
-    <h2 class="section-title">Meta do mês</h2>
-    <section class="panel meta-panel" id="metaPanel">
-      <div class="panel__header">
-        <h2 class="panel__title">🎯 Meta de faturamento</h2>
-        <div class="meta-input-row">
-          <input type="number" id="metaInput" placeholder="Ex: 15000" class="search-input meta-input">
-          <button id="metaSaveBtn" class="btn btn--primary">Salvar</button>
-        </div>
-      </div>
-      <div id="metaContent"></div>
-    </section>
+    <!-- ================================================= TAB: PRODUTOS -->
+    <section class="tab-panel" data-tab="produtos">
 
-    <h2 class="section-title">Saída por dia</h2>
-    <section class="panel">
-      <div class="panel__header">
-        <h2 class="panel__title">O que saiu em um dia específico</h2>
-        <select id="diaSelect" class="search-input" style="max-width:180px;flex:none;"></select>
-      </div>
-      <div class="table-wrap">
-        <table id="diaTable">
-          <thead><tr><th>SKU</th><th>Fornecedor</th><th class="num">Quantidade</th></tr></thead>
-          <tbody id="diaBody"></tbody>
-        </table>
-      </div>
-    </section>
+      <h2 class="section-title">Visão geral dos produtos</h2>
+      <section class="kpi-row" id="kpiRow" aria-label="Resumo por diretriz"></section>
 
-    <h2 class="section-title">Estoque &amp; capital parado</h2>
-    <details class="collapsible" open>
-      <summary>📦 Quanto dinheiro está parado em estoque</summary>
+      <h2 class="section-title">Tendência <span class="muted">(evolução 30 dias)</span></h2>
+      <section class="tendencia" id="tendenciaRow" aria-label="Tendência de vendas"></section>
+
+      <h2 class="section-title">Curva ABC <span class="muted">(por faturamento, últimos 12 meses)</span></h2>
+      <section class="abc-row" id="abcRow" aria-label="Curva ABC"></section>
+
+      <h2 class="section-title">Saída por dia</h2>
       <section class="panel">
+        <div class="panel__header">
+          <h2 class="panel__title">O que saiu em um dia específico</h2>
+          <select id="diaSelect" class="search-input" style="max-width:180px;flex:none;"></select>
+        </div>
+        <div class="table-wrap">
+          <table id="diaTable">
+            <thead><tr><th></th><th>SKU</th><th>Fornecedor</th><th class="num">Quantidade</th></tr></thead>
+            <tbody id="diaBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <details class="collapsible" id="listaCompletaDetails">
+        <summary>📋 Lista completa de produtos <span class="muted">— busca, filtros e gráficos de saída</span></summary>
+
+        <section class="panel filters">
+          <input type="search" id="searchInput" placeholder="Buscar por SKU, fornecedor ou categoria…" class="search-input">
+          <div class="chip-group" id="diretrizFilters" aria-label="Filtrar por diretriz"></div>
+          <div class="chip-group" id="classifFilters" aria-label="Filtrar por classificação"></div>
+        </section>
+
+        <section class="grid-2">
+          <div class="panel">
+            <div class="panel__header">
+              <h2 class="panel__title">Saída por período</h2>
+              <div class="toggle-group" id="periodoToggle">
+                <button type="button" class="toggle-btn active" data-periodo="dia">Dia</button>
+                <button type="button" class="toggle-btn" data-periodo="semana">Semana</button>
+                <button type="button" class="toggle-btn" data-periodo="mes">Mês</button>
+              </div>
+            </div>
+            <canvas id="dailyChart" height="180"></canvas>
+          </div>
+          <div class="panel">
+            <h2 class="panel__title">Saída mensal — últimos 12 meses</h2>
+            <canvas id="monthlyChart" height="180"></canvas>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__header">
+            <h2 class="panel__title">Lista completa <span id="rowCount" class="muted"></span></h2>
+          </div>
+          <div class="table-wrap">
+            <table id="productsTable">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th data-key="SKUs">SKU</th>
+                  <th data-key="Fornecedor">Fornecedor</th>
+                  <th data-key="Categorias">Categoria</th>
+                  <th data-key="Preço Atual" class="num">Preço</th>
+                  <th data-key="Estoque AnyMarket disponível" class="num">Estoque</th>
+                  <th data-key="Estoque WMS" class="num">Estoque WMS</th>
+                  <th data-key="Últimos 7 dias" class="num">7 dias</th>
+                  <th data-key="Últimos 15 dias" class="num">15 dias</th>
+                  <th data-key="Últimos 30 dias" class="num">30 dias</th>
+                  <th data-key="Evolução últimos 30 dias" class="num">Evol. 30d</th>
+                  <th data-key="_fat_rs" class="num">Faturamento 12M</th>
+                  <th data-key="_lucro_rs" class="num">Lucro 12M</th>
+                  <th data-key="_margem" class="num">Margem %</th>
+                  <th data-key="Dias até Ruptura" class="num">Ruptura</th>
+                  <th data-key="Classificação">Classificação</th>
+                  <th data-key="DIRETRIZ">DIRETRIZ</th>
+                </tr>
+              </thead>
+              <tbody id="productsBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </details>
+
+    </section>
+
+    <!-- ================================================== TAB: ESTOQUE -->
+    <section class="tab-panel" data-tab="estoque">
+
+      <h2 class="section-title">Risco de ruptura de estoque</h2>
+      <section class="panel">
+        <div class="panel__header">
+          <h2 class="panel__title">Vai faltar em breve <span class="muted">(baseado na velocidade de venda dos últimos 15 dias)</span></h2>
+        </div>
+        <div class="table-wrap">
+          <table id="rupturaTable">
+            <thead>
+              <tr>
+                <th>SKU</th>
+                <th>Fornecedor</th>
+                <th class="num">Estoque atual</th>
+                <th class="num">Vendas/dia</th>
+                <th class="num">Dias até faltar</th>
+                <th>Previsão</th>
+              </tr>
+            </thead>
+            <tbody id="rupturaBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <h2 class="section-title">Estoque &amp; capital parado</h2>
+      <section class="panel">
+        <div class="panel__header">
+          <h2 class="panel__title">📦 Quanto dinheiro está parado em estoque</h2>
+        </div>
         <div class="fin-kpi-row" id="estoqueKpiRow"></div>
       </section>
+
       <details class="collapsible">
         <summary>Ver tabela completa por produto</summary>
         <section class="panel">
@@ -138,40 +251,13 @@
           </div>
         </section>
       </details>
-    </details>
 
-    <h2 class="section-title">Visão geral dos produtos</h2>
-    <section class="kpi-row" id="kpiRow" aria-label="Resumo por diretriz"></section>
-
-    <section class="tendencia" id="tendenciaRow" aria-label="Tendência de vendas"></section>
-
-    <h2 class="section-title">Curva ABC <span class="muted">(por faturamento, últimos 12 meses)</span></h2>
-    <section class="abc-row" id="abcRow" aria-label="Curva ABC"></section>
-
-    <h2 class="section-title">Risco de ruptura de estoque</h2>
-    <section class="panel">
-      <div class="panel__header">
-        <h2 class="panel__title">Vai faltar em breve <span class="muted">(baseado na velocidade de venda dos últimos 15 dias)</span></h2>
-      </div>
-      <div class="table-wrap">
-        <table id="rupturaTable">
-          <thead>
-            <tr>
-              <th>SKU</th>
-              <th>Fornecedor</th>
-              <th class="num">Estoque atual</th>
-              <th class="num">Vendas/dia</th>
-              <th class="num">Dias até faltar</th>
-              <th>Previsão</th>
-            </tr>
-          </thead>
-          <tbody id="rupturaBody"></tbody>
-        </table>
-      </div>
     </section>
 
-    <details class="collapsible">
-      <summary>💰 Financeiro <span class="muted">— clique para ver entradas, saídas e margem</span></summary>
+    <!-- =============================================== TAB: FINANCEIRO -->
+    <section class="tab-panel" data-tab="financeiro">
+
+      <h2 class="section-title">Financeiro</h2>
       <section class="panel financeiro">
         <div class="panel__header">
           <div class="toggle-group" id="financeiroToggle">
@@ -182,70 +268,8 @@
         <div class="fin-kpi-row" id="finKpiRow"></div>
         <canvas id="financeiroChart" height="140"></canvas>
       </section>
-    </details>
 
-    <details class="collapsible">
-      <summary>📋 Lista completa de produtos <span class="muted">— busca, filtros e gráficos de saída</span></summary>
-
-      <section class="panel filters">
-        <input type="search" id="searchInput" placeholder="Buscar por SKU, fornecedor ou categoria…" class="search-input">
-        <div class="chip-group" id="diretrizFilters" aria-label="Filtrar por diretriz"></div>
-        <div class="chip-group" id="classifFilters" aria-label="Filtrar por classificação"></div>
-      </section>
-
-      <section class="grid-2">
-        <div class="panel">
-          <div class="panel__header">
-            <h2 class="panel__title">Saída por período</h2>
-            <div class="toggle-group" id="periodoToggle">
-              <button type="button" class="toggle-btn active" data-periodo="dia">Dia</button>
-              <button type="button" class="toggle-btn" data-periodo="semana">Semana</button>
-              <button type="button" class="toggle-btn" data-periodo="mes">Mês</button>
-            </div>
-          </div>
-          <canvas id="dailyChart" height="180"></canvas>
-        </div>
-        <div class="panel">
-          <h2 class="panel__title">Saída mensal — últimos 12 meses</h2>
-          <canvas id="monthlyChart" height="180"></canvas>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel__header">
-          <h2 class="panel__title">Lista completa <span id="rowCount" class="muted"></span></h2>
-        </div>
-        <div class="table-wrap">
-          <table id="productsTable">
-            <thead>
-              <tr>
-                <th></th>
-                <th data-key="SKUs">SKU</th>
-                <th data-key="Fornecedor">Fornecedor</th>
-                <th data-key="Categorias">Categoria</th>
-                <th data-key="Preço Atual" class="num">Preço</th>
-                <th data-key="Estoque AnyMarket disponível" class="num">Estoque</th>
-                <th data-key="Estoque WMS" class="num">Estoque WMS</th>
-                <th data-key="Últimos 7 dias" class="num">7 dias</th>
-                <th data-key="Últimos 15 dias" class="num">15 dias</th>
-                <th data-key="Últimos 30 dias" class="num">30 dias</th>
-                <th data-key="Evolução últimos 30 dias" class="num">Evol. 30d</th>
-                <th data-key="_fat_rs" class="num">Faturamento 12M</th>
-                <th data-key="_lucro_rs" class="num">Lucro 12M</th>
-                <th data-key="_margem" class="num">Margem %</th>
-                <th data-key="Dias até Ruptura" class="num">Ruptura</th>
-                <th data-key="Classificação">Classificação</th>
-                <th data-key="DIRETRIZ">DIRETRIZ</th>
-              </tr>
-            </thead>
-            <tbody id="productsBody"></tbody>
-          </table>
-        </div>
-      </section>
-    </details>
-
-    <details class="collapsible">
-      <summary>🧾 Transações <span class="muted">— cada venda, com opção de agrupar por SKU</span></summary>
+      <h2 class="section-title">Transações</h2>
       <section class="panel">
         <div class="panel__header">
           <h2 class="panel__title">Vendas <span id="transCount" class="muted"></span></h2>
@@ -263,7 +287,8 @@
           </table>
         </div>
       </section>
-    </details>
+
+    </section>
 
   </section>
 </main>
