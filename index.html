@@ -88,6 +88,14 @@
         <p class="hero__footnote">comparado com a média dos últimos 7 dias</p>
       </section>
 
+      <h2 class="section-title">O que fazer hoje</h2>
+      <section class="panel" id="acoesHojePanel">
+        <div class="panel__header">
+          <h2 class="panel__title">📌 Prioridades de hoje <span class="muted">— ruptura, produtos em saída e margem baixa, tudo num lugar só</span></h2>
+        </div>
+        <div id="acoesHojeBody"></div>
+      </section>
+
       <h2 class="section-title">Meta do mês</h2>
       <section class="panel meta-panel" id="metaPanel">
         <div class="panel__header">
@@ -114,15 +122,38 @@
       <h2 class="section-title">Curva ABC <span class="muted">(por faturamento, últimos 12 meses)</span></h2>
       <section class="abc-row" id="abcRow" aria-label="Curva ABC"></section>
 
-      <h2 class="section-title">Saída por dia</h2>
-      <section class="panel">
+      <h2 class="section-title">Saída por período</h2>
+      <section class="panel periodo-panel">
         <div class="panel__header">
-          <h2 class="panel__title">O que saiu em um dia específico</h2>
-          <select id="diaSelect" class="search-input" style="max-width:180px;flex:none;"></select>
+          <h2 class="panel__title">O que saiu num dia, num intervalo, ou período escolhido</h2>
         </div>
+
+        <div class="periodo-picker">
+          <div class="periodo-picker__dates">
+            <label>De<input type="date" id="dataDe"></label>
+            <label>Até<input type="date" id="dataAte"></label>
+          </div>
+          <div class="preset-group" id="periodoPresets">
+            <button type="button" class="preset-btn" data-preset="hoje">Hoje</button>
+            <button type="button" class="preset-btn" data-preset="ontem">Ontem</button>
+            <button type="button" class="preset-btn" data-preset="7dias">Últimos 7 dias</button>
+            <button type="button" class="preset-btn" data-preset="mes">Este mês</button>
+          </div>
+        </div>
+
+        <div class="periodo-resumo" id="periodoResumo"></div>
+
         <div class="table-wrap">
           <table id="diaTable">
-            <thead><tr><th></th><th>SKU</th><th>Fornecedor</th><th class="num">Quantidade</th></tr></thead>
+            <thead>
+              <tr>
+                <th></th>
+                <th>SKU</th>
+                <th>Fornecedor</th>
+                <th class="num">Quantidade</th>
+                <th class="num">Faturamento</th>
+              </tr>
+            </thead>
             <tbody id="diaBody"></tbody>
           </table>
         </div>
@@ -284,6 +315,31 @@
               <tr id="transHead"></tr>
             </thead>
             <tbody id="transBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <h2 class="section-title">Comparativo de meses</h2>
+      <section class="panel">
+        <div class="panel__header">
+          <h2 class="panel__title">Compare dois meses quaisquer</h2>
+          <div class="comparativo-selects">
+            <select id="mesASelect" class="search-input" style="max-width:130px;flex:none;"></select>
+            <span class="muted">vs</span>
+            <select id="mesBSelect" class="search-input" style="max-width:130px;flex:none;"></select>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="comparativoTable">
+            <thead>
+              <tr>
+                <th>Métrica</th>
+                <th class="num" id="mesALabel">Mês A</th>
+                <th class="num" id="mesBLabel">Mês B</th>
+                <th class="num">Variação</th>
+              </tr>
+            </thead>
+            <tbody id="comparativoBody"></tbody>
           </table>
         </div>
       </section>

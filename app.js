@@ -163,6 +163,7 @@
     if (!state.produtos.length) { showEmpty(); return; }
     showDashboard();
     renderHero();
+    renderAcoesHoje();
     renderMeta();
     renderKpis();
     renderAbc();
@@ -175,6 +176,63 @@
     renderTable();
     renderCharts();
     renderTransacoes();
+    renderComparativo();
+  }
+
+  function popularSelectsComparativo_() {
+    const meses = state.financeiro_mensal;
+    const selA = document.getElementById("mesASelect"), selB = document.getElementById("mesBSelect");
+    if (selA.dataset.populated === String(meses.length)) return; // só popula 1x por quantidade de meses
+    const opts = meses.map((m, i) => `<option value="${i}">${fmtMesLabel_(m.periodo)}</option>`).join("");
+    selA.innerHTML = opts;
+    selB.innerHTML = opts;
+    if (meses.length >= 2) { selA.value = String(meses.length - 2); selB.value = String(meses.length - 1); }
+    selA.dataset.populated = String(meses.length);
+  }
+
+  const MESES_ABREV = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  function fmtMesLabel_(iso) {
+    const d = new Date(iso);
+    return `${MESES_ABREV[d.getMonth()]}/${String(d.getFullYear()).slice(2)}`;
+  }
+
+  document.getElementById("mesASelect").addEventListener("change", renderComparativo);
+  document.getElementById("mesBSelect").addEventListener("change", renderComparativo);
+
+  function renderComparativo() {
+    popularSelectsComparativo_();
+    const meses = state.financeiro_mensal;
+    if (!meses.length) return;
+    const idxA = Number(document.getElementById("mesASelect").value || 0);
+    const idxB = Number(document.getElementById("mesBSelect").value || 0);
+    const mesA = meses[idxA], mesB = meses[idxB];
+    if (!mesA || !mesB) return;
+
+    document.getElementById("mesALabel").textContent = fmtMesLabel_(mesA.periodo);
+    document.getElementById("mesBLabel").textContent = fmtMesLabel_(mesB.periodo);
+
+    const linhas = [
+      { label: "Faturamento", a: mesA.faturamento, b: mesB.faturamento, tipo: "money" },
+      { label: "Custo (produto)", a: mesA.custo, b: mesB.custo, tipo: "money" },
+      { label: "Taxa ML", a: mesA.taxa_ml, b: mesB.taxa_ml, tipo: "money" },
+      { label: "Frete", a: mesA.frete, b: mesB.frete, tipo: "money" },
+      { label: "Gasto Ads", a: mesA.gasto_ads, b: mesB.gasto_ads, tipo: "money" },
+      { label: "Lucro Líquido", a: mesA.lucro_liquido, b: mesB.lucro_liquido, tipo: "money" },
+      { label: "Margem", a: mesA.margem, b: mesB.margem, tipo: "pct" },
+    ];
+
+    document.getElementById("comparativoBody").innerHTML = linhas.map((l) => {
+      const fmt = l.tipo === "money" ? fmtMoney : fmtPct;
+      const variacao = l.a ? ((l.b - l.a) / Math.abs(l.a)) * 100 : (l.b ? 100 : 0);
+      const cls = variacao > 0.5 ? "up" : variacao < -0.5 ? "down" : "";
+      const seta = variacao > 0.5 ? "▲" : variacao < -0.5 ? "▼" : "•";
+      return `<tr>
+        <td>${l.label}</td>
+        <td class="num">${fmt(l.a)}</td>
+        <td class="num">${fmt(l.b)}</td>
+        <td class="num ${cls}">${seta} ${Math.abs(variacao).toFixed(0)}%</td>
+      </tr>`;
+    }).join("");
   }
 
   function isoDate_(d) {
@@ -786,6 +844,64 @@
   function metaKey_() {
     const d = new Date();
     return `meta_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+
+  function renderAcoesHoje() {
+    const itens = [];
+
+    state.produtos.forEach((p) => {
+      if (p["Inativo"]) return;
+      const dias = p["Dias até Ruptura"];
+      if (dias !== "-" && dias !== undefined && dias !== null && Number(dias) <= 7) {
+        itens.push({
+          sku: p["SKUs"], foto: p["Foto URL"], link: p["Link Anúncio"],
+          tag: "🔴 Ruptura", tipo: "ruptura",
+          desc: `Estoque acaba em ${dias} dia(s) — repor agora`,
+          prioridade: 0 + Number(dias) / 100,
+        });
+      }
+    });
+
+    state.produtos.forEach((p) => {
+      if (p["Inativo"]) return;
+      if ((p["DIRETRIZ"] || "").includes("SAÍDA")) {
+        itens.push({
+          sku: p["SKUs"], foto: p["Foto URL"], link: p["Link Anúncio"],
+          tag: "🟠 Em saída", tipo: "saida",
+          desc: "Vendas fracas e nota baixa — considere promoção ou tirar de linha",
+          prioridade: 1,
+        });
+      }
+    });
+
+    state.produtos.forEach((p) => {
+      if (p["Inativo"]) return;
+      const margem = p["_margem"];
+      const fat = Number(p["_fat_rs"] || 0);
+      if (margem !== undefined && margem < 0.10 && fat > 0 && !(p["DIRETRIZ"] || "").includes("SAÍDA")) {
+        itens.push({
+          sku: p["SKUs"], foto: p["Foto URL"], link: p["Link Anúncio"],
+          tag: "🟡 Margem baixa", tipo: "margem",
+          desc: `Margem de ${fmtPct(margem)} — revise custo ou preço`,
+          prioridade: 2 - margem,
+        });
+      }
+    });
+
+    itens.sort((a, b) => a.prioridade - b.prioridade);
+
+    const body = document.getElementById("acoesHojeBody");
+    if (!itens.length) {
+      body.innerHTML = `<p class="acao-vazio">Nenhuma prioridade urgente hoje — tudo dentro do esperado.</p>`;
+      return;
+    }
+    body.innerHTML = itens.slice(0, 15).map((it) => `
+      <div class="acao-item">
+        ${fmtFoto(it.foto)}
+        <span class="acao-item__tag acao-item__tag--${it.tipo}">${it.tag}</span>
+        ${fmtSkuLink(it.sku, it.link)}
+        <span class="acao-item__desc">${escapeHtml(it.desc)}</span>
+      </div>`).join("");
   }
 
   function renderMeta() {
