@@ -168,7 +168,7 @@
     renderAbc();
     renderTendencia();
     renderRuptura();
-    renderSaidaPorDiaSelect();
+    renderSaidaPorDia();
     renderEstoque();
     renderFinanceiro();
     renderFilters();
@@ -177,33 +177,86 @@
     renderTransacoes();
   }
 
-  function renderSaidaPorDiaSelect() {
-    const sel = document.getElementById("diaSelect");
-    const serieRef = state.saida_diaria[0] ? state.saida_diaria[0].serie : [];
-    const jaTinhaValor = sel.value !== "";
-    sel.innerHTML = serieRef.map((s, i) => {
-      const label = (s.periodo || "").slice(5).split("-").reverse().join("/");
-      const isOntem = i === serieRef.length - 2;
-      return `<option value="${i}">${label}${isOntem ? " (ontem)" : i === serieRef.length - 1 ? " (hoje)" : ""}</option>`;
-    }).join("");
-    if (!jaTinhaValor && serieRef.length >= 2) sel.value = String(serieRef.length - 2); // padrão: ontem
-    renderSaidaPorDia();
+  function isoDate_(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
 
-  document.getElementById("diaSelect").addEventListener("change", renderSaidaPorDia);
+  function initPeriodoPicker_() {
+    const ontem = new Date();
+    ontem.setDate(ontem.getDate() - 1);
+    document.getElementById("dataDe").value = isoDate_(ontem);
+    document.getElementById("dataAte").value = isoDate_(ontem);
+    marcarPresetAtivo_("ontem");
+  }
+
+  function marcarPresetAtivo_(preset) {
+    document.querySelectorAll(".preset-btn").forEach((b) => b.classList.toggle("active", b.dataset.preset === preset));
+  }
+
+  document.getElementById("periodoPresets").addEventListener("click", (e) => {
+    const btn = e.target.closest(".preset-btn");
+    if (!btn) return;
+    const hoje = new Date();
+    const de = document.getElementById("dataDe"), ate = document.getElementById("dataAte");
+    if (btn.dataset.preset === "hoje") { de.value = isoDate_(hoje); ate.value = isoDate_(hoje); }
+    if (btn.dataset.preset === "ontem") {
+      const o = new Date(hoje); o.setDate(o.getDate() - 1);
+      de.value = isoDate_(o); ate.value = isoDate_(o);
+    }
+    if (btn.dataset.preset === "7dias") {
+      const seteAtras = new Date(hoje); seteAtras.setDate(seteAtras.getDate() - 6);
+      de.value = isoDate_(seteAtras); ate.value = isoDate_(hoje);
+    }
+    if (btn.dataset.preset === "mes") {
+      de.value = isoDate_(new Date(hoje.getFullYear(), hoje.getMonth(), 1)); ate.value = isoDate_(hoje);
+    }
+    marcarPresetAtivo_(btn.dataset.preset);
+    renderSaidaPorDia();
+  });
+
+  document.getElementById("dataDe").addEventListener("change", () => { marcarPresetAtivo_(null); renderSaidaPorDia(); });
+  document.getElementById("dataAte").addEventListener("change", () => { marcarPresetAtivo_(null); renderSaidaPorDia(); });
 
   function renderSaidaPorDia() {
-    const idx = Number(document.getElementById("diaSelect").value || 0);
-    const fotoPorSku = {}, linkPorSku = {};
-    state.produtos.forEach((p) => { fotoPorSku[p["SKUs"]] = p["Foto URL"]; linkPorSku[p["SKUs"]] = p["Link Anúncio"]; });
-    const linhas = state.saida_diaria
-      .map((item) => ({ sku: item.sku, fornecedor: item.fornecedor, qtd: Number((item.serie[idx] || {}).quantidade || 0) }))
-      .filter((l) => l.qtd > 0)
-      .sort((a, b) => b.qtd - a.qtd);
+    const de = document.getElementById("dataDe").value;
+    const ate = document.getElementById("dataAte").value;
+    if (!de || !ate) return;
+
+    const fotoPorSku = {}, linkPorSku = {}, fornecedorPorSku = {};
+    state.produtos.forEach((p) => {
+      fotoPorSku[p["SKUs"]] = p["Foto URL"];
+      linkPorSku[p["SKUs"]] = p["Link Anúncio"];
+      fornecedorPorSku[p["SKUs"]] = p["Fornecedor"];
+    });
+
+    const noPeriodo = state.transacoes.filter((t) => {
+      const d = (t.data || "").slice(0, 10);
+      return d >= de && d <= ate;
+    });
+
+    const grupos = {};
+    noPeriodo.forEach((t) => {
+      if (!grupos[t.sku]) grupos[t.sku] = { sku: t.sku, fornecedor: fornecedorPorSku[t.sku], qtd: 0, faturamento: 0 };
+      grupos[t.sku].qtd += Number(t.quantidade) || 0;
+      grupos[t.sku].faturamento += Number(t.faturamento) || 0;
+    });
+    const linhas = Object.values(grupos).sort((a, b) => b.faturamento - a.faturamento);
+
+    const totalQtd = linhas.reduce((s, l) => s + l.qtd, 0);
+    const totalFat = linhas.reduce((s, l) => s + l.faturamento, 0);
+    document.getElementById("periodoResumo").innerHTML = `
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtNum(totalQtd)}</span>
+        <span class="fin-kpi__label">Unidades vendidas no período</span>
+      </div>
+      <div class="fin-kpi fin-kpi--in">
+        <span class="fin-kpi__value">${fmtMoney(totalFat)}</span>
+        <span class="fin-kpi__label">Faturamento no período</span>
+      </div>`;
 
     const body = document.getElementById("diaBody");
     if (!linhas.length) {
-      body.innerHTML = `<tr><td colspan="4" class="muted" style="text-align:center;padding:16px;">Nenhuma venda nesse dia.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="5" class="muted" style="text-align:center;padding:16px;">Nenhuma venda nesse período.</td></tr>`;
       return;
     }
     body.innerHTML = linhas.map((l) => `
@@ -212,6 +265,7 @@
         <td>${fmtSkuLink(l.sku, linkPorSku[l.sku])}</td>
         <td>${escapeHtml(l.fornecedor ?? "-")}</td>
         <td class="num">${fmtNum(l.qtd)}</td>
+        <td class="num">${fmtMoney(l.faturamento)}</td>
       </tr>`).join("");
   }
 
@@ -493,6 +547,10 @@
     const canvas = detailRow.querySelector("canvas");
 
     const serie = (state.saida_diaria.find((d) => d.sku === product["SKUs"]) || {}).serie || [];
+    if (typeof Chart === "undefined") {
+      canvas.insertAdjacentHTML("afterend", `<p class="chart-erro">⚠️ Biblioteca de gráficos não carregou — recarregue a página.</p>`);
+      return;
+    }
     new Chart(canvas, {
       type: "line",
       data: {
@@ -512,9 +570,24 @@
     });
   }
 
+  // Se o Chart.js (carregado de um CDN externo) não terminar de carregar
+  // (conexão lenta, bloqueador de anúncio, instabilidade do CDN), evita que
+  // os gráficos fiquem vazios sem explicação — mostra um aviso e permite
+  // tentar de novo, em vez de simplesmente falhar em silêncio.
+  function chartJsDisponivel_(canvasId) {
+    if (typeof Chart !== "undefined") return true;
+    const canvas = document.getElementById(canvasId);
+    if (canvas && canvas.parentElement && !canvas.parentElement.querySelector(".chart-erro")) {
+      canvas.parentElement.insertAdjacentHTML("beforeend",
+        `<p class="chart-erro">⚠️ Não foi possível carregar a biblioteca de gráficos (conexão lenta ou bloqueada). <button type="button" onclick="location.reload()" class="btn btn--ghost" style="margin-left:6px;">Recarregar página</button></p>`);
+    }
+    return false;
+  }
+
   function renderCharts() {
     renderDailyChart();
 
+    if (!chartJsDisponivel_("monthlyChart")) return;
     const monthlyTotals = aggregateSeries(state.saida_mensal);
     if (monthlyChart) monthlyChart.destroy();
     monthlyChart = new Chart(document.getElementById("monthlyChart"), {
@@ -525,6 +598,7 @@
   }
 
   function renderDailyChart() {
+    if (!chartJsDisponivel_("dailyChart")) return;
     let labels, values;
     if (state.periodoView === "mes") {
       const m = aggregateSeries(state.saida_mensal);
@@ -613,6 +687,7 @@
         <span class="fin-kpi__label">Margem líquida</span>
       </div>`;
 
+    if (!chartJsDisponivel_("financeiroChart")) return;
     if (financeiroChart) financeiroChart.destroy();
     financeiroChart = new Chart(document.getElementById("financeiroChart"), {
       type: "bar",
@@ -876,6 +951,7 @@
   });
 
   // ---------------------------------------------------------------- init
+  initPeriodoPicker_();
   fetchData();
   setInterval(fetchData, 60000); // atualiza sozinho a cada 1 min
 })();
