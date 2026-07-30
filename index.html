@@ -187,11 +187,11 @@
                 <button type="button" class="toggle-btn" data-periodo="mes">Mês</button>
               </div>
             </div>
-            <canvas id="dailyChart" height="180"></canvas>
+            <div class="chart-box"><canvas id="dailyChart"></canvas></div>
           </div>
           <div class="panel">
             <h2 class="panel__title">Saída mensal — últimos 12 meses</h2>
-            <canvas id="monthlyChart" height="180"></canvas>
+            <div class="chart-box"><canvas id="monthlyChart"></canvas></div>
           </div>
         </section>
 
@@ -306,7 +306,7 @@
           </div>
         </div>
         <div class="fin-kpi-row" id="finKpiRow"></div>
-        <canvas id="financeiroChart" height="140"></canvas>
+        <div class="chart-box chart-box--lg"><canvas id="financeiroChart"></canvas></div>
       </section>
 
       <h2 class="section-title">Transações</h2>
@@ -361,7 +361,7 @@
 <template id="rowDetailTemplate">
   <tr class="row-detail">
     <td colspan="17">
-      <canvas class="sparkline" height="60"></canvas>
+      <div class="chart-box chart-box--sm"><canvas class="sparkline"></canvas></div>
     </td>
   </tr>
 </template>
