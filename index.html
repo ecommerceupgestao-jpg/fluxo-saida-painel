@@ -47,6 +47,15 @@
   </form>
 </dialog>
 
+<section id="mobileBlock" class="mobile-block hidden">
+  <div class="mobile-block__card">
+    <img src="logo.jpg" alt="Teko" class="mobile-block__logo">
+    <h1>Abra no computador</h1>
+    <p>Este painel foi desenhado para uso no computador. No celular os gráficos não renderizam corretamente, então o acesso mobile foi desativado por enquanto.</p>
+    <p class="muted">Acesse pelo navegador do seu notebook ou desktop.</p>
+  </div>
+</section>
+
 <main id="app">
 
   <section id="emptyState" class="empty-state">
@@ -357,7 +366,32 @@
   </tr>
 </template>
 
-<script src="config.js"></script>
-<script src="app.js"></script>
+<script>
+(function () {
+  // Detecta celular/tablet por User-Agent e por largura de tela. Se for
+  // mobile, mostra a tela de bloqueio e NEM CARREGA config.js/app.js —
+  // assim os gráficos (Chart.js) nunca chegam a rodar no celular, que era
+  // a causa do bug. No computador, tudo continua funcionando normalmente.
+  var ua = navigator.userAgent || "";
+  var isMobileUA = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|Windows Phone/i.test(ua);
+  var isSmallScreen = Math.min(window.innerWidth, window.screen.width) < 900;
+  var isMobile = isMobileUA || isSmallScreen;
+
+  if (isMobile) {
+    document.getElementById("app").classList.add("hidden");
+    document.getElementById("mobileBlock").classList.remove("hidden");
+    return;
+  }
+
+  var s1 = document.createElement("script");
+  s1.src = "config.js";
+  s1.onload = function () {
+    var s2 = document.createElement("script");
+    s2.src = "app.js";
+    document.body.appendChild(s2);
+  };
+  document.body.appendChild(s1);
+})();
+</script>
 </body>
 </html>
