@@ -340,6 +340,11 @@
           <h2 class="panel__title">Financeiro <span class="muted">— escolha o mês pra ver o total fechado e o dia a dia dele</span></h2>
           <div class="fin-header-controls">
             <select id="financeiroMesSelect" class="search-input" style="max-width:160px;flex:none;"></select>
+            <div class="toggle-group" id="financeiroContaToggle">
+              <button type="button" class="toggle-btn active" data-conta="ambas">Ambas as contas</button>
+              <button type="button" class="toggle-btn" data-conta="1">Conta 1</button>
+              <button type="button" class="toggle-btn" data-conta="2">Conta 2</button>
+            </div>
             <div class="toggle-group" id="financeiroToggle">
               <button type="button" class="toggle-btn active" data-view="mensal">Mensal</button>
               <button type="button" class="toggle-btn" data-view="diario">Diário</button>
@@ -347,6 +352,7 @@
           </div>
         </div>
         <div class="fin-kpi-row" id="finKpiRow"></div>
+        <div class="fin-kpi-row" id="finContaBreakdown"></div>
         <div class="chart-box chart-box--lg"><canvas id="financeiroChart"></canvas></div>
       </section>
 

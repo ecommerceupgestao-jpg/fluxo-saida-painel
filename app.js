@@ -41,6 +41,7 @@
     transacoes: [],
     financeiroView: "mensal",
     mesFinanceiro: null,
+    contaFinanceiro: "ambas",
     periodoView: "dia",
     transModo: "detalhado",
     sortKey: "Últimos 30 dias",
@@ -115,9 +116,9 @@
       state.saida_diaria = data.saida_diaria || [];
       state.saida_mensal = data.saida_mensal || [];
       state.financeiro_diario = data.financeiro_diario || [];
-      state.financeiro_mensal = data.financeiro_mensal || [];
-      state.curva_abc = data.curva_abc || [];
+      state.financeiro_mensal = data.financeiro_mensal || [];      state.curva_abc = data.curva_abc || [];
       state.transacoes = data.transacoes || [];
+      state.transacoes_2 = data.transacoes_2 || [];
 
       // Junta o Faturamento/Lucro em R$ (da Curva ABC) em cada produto,
       // pra mostrar valor real ao lado da nota A/B/C.
@@ -761,12 +762,22 @@
   // COMPLETO de RAW_Vendas, que já vem por venda), pra funcionar com
   // qualquer mês que você escolher — não só os que ainda estão dentro da
   // janela rolante da planilha.
-  function transacoesDoMes_(yyyyMM) {
-    return state.transacoes.filter((t) => (t.data || "").slice(0, 7) === yyyyMM);
+  // Devolve a lista de transações da conta escolhida ("1", "2" ou "ambas").
+  // Junta as duas listas quando "ambas" — como cada uma vem de uma aba
+  // separada (RAW_Vendas / RAW_Vendas_2), não tem risco de duplicar nada.
+  function transacoesPorConta_(conta) {
+    if (conta === "1") return state.transacoes;
+    if (conta === "2") return state.transacoes_2;
+    return state.transacoes.concat(state.transacoes_2);
   }
 
-  function totaisFinanceiroMes_(yyyyMM) {
-    const txs = transacoesDoMes_(yyyyMM);
+  function transacoesDoMes_(yyyyMM, conta) {
+    return transacoesPorConta_(conta || state.contaFinanceiro).filter((t) => (t.data || "").slice(0, 7) === yyyyMM);
+  }
+
+  function totaisFinanceiroMes_(yyyyMM, conta) {
+    const contaEfetiva = conta || state.contaFinanceiro;
+    const txs = transacoesDoMes_(yyyyMM, contaEfetiva);
     const base = txs.reduce((acc, t) => ({
       faturamento: acc.faturamento + Number(t.faturamento || 0),
       custo: acc.custo + Number(t.custo || 0),
@@ -774,12 +785,14 @@
       frete: acc.frete + Number(t.frete || 0),
     }), { faturamento: 0, custo: 0, taxa: 0, frete: 0 });
 
-    // "Gasto Ads" é digitado manualmente na planilha (não vem do Mercado
-    // Livre) — só está disponível pros meses que ainda estão dentro da
-    // janela de 12 meses de "Financeiro Mensal". Fora disso, fica 0.
+    // "Gasto Ads" é digitado manualmente na planilha, pra CONTA 1 e sem
+    // divisão por conta — só entra na conta quando a visão é "Ambas"
+    // (que é o total real que ele representa). Olhando só a Conta 1 ou só
+    // a Conta 2 isoladamente, não temos como saber qual fatia do Ads é de
+    // qual conta, então não subtraímos (fica documentado no aviso).
     const mesInfo = state.financeiro_mensal.find((m) => (m.periodo || "").slice(0, 7) === yyyyMM);
-    const ads = mesInfo ? Number(mesInfo.gasto_ads || 0) : 0;
-    const semDadoAds = !mesInfo;
+    const ads = contaEfetiva === "ambas" && mesInfo ? Number(mesInfo.gasto_ads || 0) : 0;
+    const semDadoAds = contaEfetiva === "ambas" ? !mesInfo : true;
 
     const lucro = base.faturamento - base.custo - base.taxa - base.frete - ads;
     return { ...base, ads, lucro, semDadoAds };
@@ -788,7 +801,7 @@
   // Série dia a dia de UM mês específico, sempre com todos os dias do mês
   // (mesmo os sem venda, com 0) — calculada das transações, não de uma
   // janela fixa, então funciona pra qualquer mês do histórico.
-  function serieDiariaDoMes_(yyyyMM) {
+  function serieDiariaDoMes_(yyyyMM, conta) {
     const [ano, mes] = yyyyMM.split("-").map(Number);
     const diasNoMes = new Date(ano, mes, 0).getDate();
     const porDia = {};
@@ -796,7 +809,7 @@
       const chave = String(d).padStart(2, "0");
       porDia[chave] = { dia: chave, faturamento: 0, custo: 0, taxa: 0, frete: 0 };
     }
-    transacoesDoMes_(yyyyMM).forEach((t) => {
+    transacoesDoMes_(yyyyMM, conta).forEach((t) => {
       const dia = (t.data || "").slice(8, 10);
       if (!porDia[dia]) return;
       porDia[dia].faturamento += Number(t.faturamento || 0);
@@ -805,12 +818,17 @@
       porDia[dia].frete += Number(t.frete || 0);
     });
     // Ads diário só existe de verdade pros dias que ainda estão dentro da
-    // janela rolante de 30 dias de "Financeiro Diário" — casa por data.
+    // janela rolante de 30 dias de "Financeiro Diário" (que é um número
+    // combinado, não dividido por conta) — só faz sentido aplicar na visão
+    // "Ambas"; olhando uma conta isolada, não sabemos a fatia certa, então
+    // não entra na conta (mesma regra dos KPIs acima).
     const adsPorDia = {};
-    state.financeiro_diario.forEach((d) => {
-      const iso = (d.periodo || "").slice(0, 10);
-      if (iso.slice(0, 7) === yyyyMM) adsPorDia[iso.slice(8, 10)] = Number(d.gasto_ads || 0);
-    });
+    if ((conta || state.contaFinanceiro) === "ambas") {
+      state.financeiro_diario.forEach((d) => {
+        const iso = (d.periodo || "").slice(0, 10);
+        if (iso.slice(0, 7) === yyyyMM) adsPorDia[iso.slice(8, 10)] = Number(d.gasto_ads || 0);
+      });
+    }
     return Object.values(porDia).map((d) => {
       const ads = adsPorDia[d.dia] || 0;
       return {
@@ -827,7 +845,7 @@
   // venda ainda, pra dar pra escolher "hoje" desde o primeiro dia do mês.
   function mesesDisponiveis_() {
     const set = new Set();
-    state.transacoes.forEach((t) => {
+    state.transacoes.concat(state.transacoes_2).forEach((t) => {
       const m = (t.data || "").slice(0, 7);
       if (m) set.add(m);
     });
@@ -865,11 +883,12 @@
     const totais = totaisFinanceiroMes_(yyyyMM);
     const totalSaidas = totais.custo + totais.taxa + totais.frete + totais.ads;
     const margem = totais.faturamento ? (totais.lucro / totais.faturamento) : 0;
+    const rotuloConta = state.contaFinanceiro === "1" ? " — Conta 1" : state.contaFinanceiro === "2" ? " — Conta 2" : "";
 
     document.getElementById("finKpiRow").innerHTML = `
       <div class="fin-kpi fin-kpi--in">
         <span class="fin-kpi__value">${fmtMoney(totais.faturamento)}</span>
-        <span class="fin-kpi__label">Entradas (faturamento) — ${fmtMesLabel_(yyyyMM + "-01")}</span>
+        <span class="fin-kpi__label">Entradas (faturamento) — ${fmtMesLabel_(yyyyMM + "-01")}${rotuloConta}</span>
       </div>
       <div class="fin-kpi fin-kpi--out">
         <span class="fin-kpi__value">${fmtMoney(totalSaidas)}</span>
@@ -881,8 +900,30 @@
       </div>
       <div class="fin-kpi">
         <span class="fin-kpi__value">${fmtPct(margem)}</span>
-        <span class="fin-kpi__label">Margem líquida${totais.semDadoAds ? " (ads não contabilizado — mês fora da janela salva)" : ""}</span>
+        <span class="fin-kpi__label">Margem líquida${totais.semDadoAds ? " (ads não contabilizado nessa visão)" : ""}</span>
       </div>`;
+
+    // Quando a visão é "Ambas", mostra embaixo quanto foi faturado em CADA
+    // conta separadamente — é o pedido de "as duas juntas, e embaixo o que
+    // foi faturado em cada uma delas".
+    const breakdown = document.getElementById("finContaBreakdown");
+    if (state.contaFinanceiro === "ambas" && (state.transacoes_2.length || state.transacoes.length)) {
+      const totaisConta1 = totaisFinanceiroMes_(yyyyMM, "1");
+      const totaisConta2 = totaisFinanceiroMes_(yyyyMM, "2");
+      breakdown.innerHTML = `
+        <div class="fin-kpi">
+          <span class="fin-kpi__value">${fmtMoney(totaisConta1.faturamento)}</span>
+          <span class="fin-kpi__label">↳ Faturado na Conta 1</span>
+        </div>
+        <div class="fin-kpi">
+          <span class="fin-kpi__value">${fmtMoney(totaisConta2.faturamento)}</span>
+          <span class="fin-kpi__label">↳ Faturado na Conta 2</span>
+        </div>`;
+      breakdown.classList.remove("hidden");
+    } else {
+      breakdown.innerHTML = "";
+      breakdown.classList.add("hidden");
+    }
 
     if (!chartJsDisponivel_("financeiroChart")) return;
     if (financeiroChart) financeiroChart.destroy();
@@ -925,6 +966,15 @@
       },
     });
   }
+
+  document.getElementById("financeiroContaToggle").addEventListener("click", (e) => {
+    const btn = e.target.closest(".toggle-btn");
+    if (!btn) return;
+    document.querySelectorAll("#financeiroContaToggle .toggle-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.contaFinanceiro = btn.dataset.conta;
+    renderFinanceiro();
+  });
 
   document.getElementById("financeiroToggle").addEventListener("click", (e) => {
     const btn = e.target.closest(".toggle-btn");
