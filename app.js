@@ -40,6 +40,7 @@
     curva_abc: [],
     transacoes: [],
     financeiroView: "mensal",
+    mesFinanceiro: null,
     periodoView: "dia",
     transModo: "detalhado",
     sortKey: "Últimos 30 dias",
@@ -169,7 +170,7 @@
     renderAbc();
     renderTendencia();
     renderRuptura();
-    renderSaidaPorDia();
+    renderTodosPeriodoPickers_();
     renderEstoque();
     renderFinanceiro();
     renderFilters();
@@ -182,12 +183,26 @@
   function popularSelectsComparativo_() {
     const meses = state.financeiro_mensal;
     const selA = document.getElementById("mesASelect"), selB = document.getElementById("mesBSelect");
-    if (selA.dataset.populated === String(meses.length)) return; // só popula 1x por quantidade de meses
-    const opts = meses.map((m, i) => `<option value="${i}">${fmtMesLabel_(m.periodo)}</option>`).join("");
+    if (!meses.length) return;
+
+    // Antes, as opções usavam o ÍNDICE do array como valor e só eram
+    // geradas 1x (guardadas por "quantidade de meses", que fica sempre em
+    // 12). Como "Financeiro Mensal" é uma janela ROLANTE de 12 meses, com
+    // o tempo o mês que estava no índice 0 sai e outro entra — mas as
+    // opções antigas continuavam com o mesmo texto e valor de antes, então
+    // o rótulo mostrado (ex: "jun/25") não era mais o mês que o índice
+    // selecionado de fato apontava. Agora a chave é a DATA do período
+    // (estável, não muda de significado com o tempo) e as opções são
+    // sempre recriadas, preservando a seleção atual quando ela ainda existir.
+    const valorAtualA = selA.value, valorAtualB = selB.value;
+    const opts = meses.map((m) => `<option value="${m.periodo}">${fmtMesLabel_(m.periodo)}</option>`).join("");
     selA.innerHTML = opts;
     selB.innerHTML = opts;
-    if (meses.length >= 2) { selA.value = String(meses.length - 2); selB.value = String(meses.length - 1); }
-    selA.dataset.populated = String(meses.length);
+
+    const existeA = meses.some((m) => m.periodo === valorAtualA);
+    const existeB = meses.some((m) => m.periodo === valorAtualB);
+    selA.value = existeA ? valorAtualA : meses[Math.max(0, meses.length - 2)].periodo;
+    selB.value = existeB ? valorAtualB : meses[meses.length - 1].periodo;
   }
 
   const MESES_ABREV = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
@@ -203,9 +218,10 @@
     popularSelectsComparativo_();
     const meses = state.financeiro_mensal;
     if (!meses.length) return;
-    const idxA = Number(document.getElementById("mesASelect").value || 0);
-    const idxB = Number(document.getElementById("mesBSelect").value || 0);
-    const mesA = meses[idxA], mesB = meses[idxB];
+    const valA = document.getElementById("mesASelect").value;
+    const valB = document.getElementById("mesBSelect").value;
+    const mesA = meses.find((m) => m.periodo === valA);
+    const mesB = meses.find((m) => m.periodo === valB);
     if (!mesA || !mesB) return;
 
     document.getElementById("mesALabel").textContent = fmtMesLabel_(mesA.periodo);
@@ -239,45 +255,60 @@
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
 
-  function initPeriodoPicker_() {
-    const ontem = new Date();
-    ontem.setDate(ontem.getDate() - 1);
-    document.getElementById("dataDe").value = isoDate_(ontem);
-    document.getElementById("dataAte").value = isoDate_(ontem);
-    marcarPresetAtivo_("ontem");
-  }
+  // Cada painel de "vendas por produto com filtro de data" (o de sempre,
+  // dentro de Produtos, e o novo, dentro de Hoje) usa o mesmo motor —
+  // só muda o conjunto de IDs e o preset inicial.
+  const PERIODO_PICKERS = [
+    { presetsId: "periodoPresets", deId: "dataDe", ateId: "dataAte", resumoId: "periodoResumo", bodyId: "diaBody", presetInicial: "ontem" },
+    { presetsId: "hojePeriodoPresets", deId: "hojeDataDe", ateId: "hojeDataAte", resumoId: "hojePeriodoResumo", bodyId: "hojeDiaBody", presetInicial: "hoje" },
+  ];
 
-  function marcarPresetAtivo_(preset) {
-    document.querySelectorAll(".preset-btn").forEach((b) => b.classList.toggle("active", b.dataset.preset === preset));
-  }
-
-  document.getElementById("periodoPresets").addEventListener("click", (e) => {
-    const btn = e.target.closest(".preset-btn");
-    if (!btn) return;
+  function aplicarPresetPeriodo_(cfg, preset) {
     const hoje = new Date();
-    const de = document.getElementById("dataDe"), ate = document.getElementById("dataAte");
-    if (btn.dataset.preset === "hoje") { de.value = isoDate_(hoje); ate.value = isoDate_(hoje); }
-    if (btn.dataset.preset === "ontem") {
+    const de = document.getElementById(cfg.deId), ate = document.getElementById(cfg.ateId);
+    if (preset === "hoje") { de.value = isoDate_(hoje); ate.value = isoDate_(hoje); }
+    if (preset === "ontem") {
       const o = new Date(hoje); o.setDate(o.getDate() - 1);
       de.value = isoDate_(o); ate.value = isoDate_(o);
     }
-    if (btn.dataset.preset === "7dias") {
+    if (preset === "7dias") {
       const seteAtras = new Date(hoje); seteAtras.setDate(seteAtras.getDate() - 6);
       de.value = isoDate_(seteAtras); ate.value = isoDate_(hoje);
     }
-    if (btn.dataset.preset === "mes") {
+    if (preset === "mes") {
       de.value = isoDate_(new Date(hoje.getFullYear(), hoje.getMonth(), 1)); ate.value = isoDate_(hoje);
     }
-    marcarPresetAtivo_(btn.dataset.preset);
-    renderSaidaPorDia();
-  });
+    document.querySelectorAll(`#${cfg.presetsId} .preset-btn`).forEach((b) => b.classList.toggle("active", b.dataset.preset === preset));
+  }
 
-  document.getElementById("dataDe").addEventListener("change", () => { marcarPresetAtivo_(null); renderSaidaPorDia(); });
-  document.getElementById("dataAte").addEventListener("change", () => { marcarPresetAtivo_(null); renderSaidaPorDia(); });
+  function initPeriodoPickers_() {
+    PERIODO_PICKERS.forEach((cfg) => {
+      aplicarPresetPeriodo_(cfg, cfg.presetInicial);
 
-  function renderSaidaPorDia() {
-    const de = document.getElementById("dataDe").value;
-    const ate = document.getElementById("dataAte").value;
+      document.getElementById(cfg.presetsId).addEventListener("click", (e) => {
+        const btn = e.target.closest(".preset-btn");
+        if (!btn) return;
+        aplicarPresetPeriodo_(cfg, btn.dataset.preset);
+        renderVendasPorProduto_(cfg);
+      });
+      document.getElementById(cfg.deId).addEventListener("change", () => {
+        document.querySelectorAll(`#${cfg.presetsId} .preset-btn`).forEach((b) => b.classList.remove("active"));
+        renderVendasPorProduto_(cfg);
+      });
+      document.getElementById(cfg.ateId).addEventListener("change", () => {
+        document.querySelectorAll(`#${cfg.presetsId} .preset-btn`).forEach((b) => b.classList.remove("active"));
+        renderVendasPorProduto_(cfg);
+      });
+    });
+  }
+
+  function renderTodosPeriodoPickers_() {
+    PERIODO_PICKERS.forEach((cfg) => renderVendasPorProduto_(cfg));
+  }
+
+  function renderVendasPorProduto_(cfg) {
+    const de = document.getElementById(cfg.deId).value;
+    const ate = document.getElementById(cfg.ateId).value;
     if (!de || !ate) return;
 
     const fotoPorSku = {}, linkPorSku = {}, fornecedorPorSku = {};
@@ -302,7 +333,7 @@
 
     const totalQtd = linhas.reduce((s, l) => s + l.qtd, 0);
     const totalFat = linhas.reduce((s, l) => s + l.faturamento, 0);
-    document.getElementById("periodoResumo").innerHTML = `
+    document.getElementById(cfg.resumoId).innerHTML = `
       <div class="fin-kpi">
         <span class="fin-kpi__value">${fmtNum(totalQtd)}</span>
         <span class="fin-kpi__label">Unidades vendidas no período</span>
@@ -312,7 +343,7 @@
         <span class="fin-kpi__label">Faturamento no período</span>
       </div>`;
 
-    const body = document.getElementById("diaBody");
+    const body = document.getElementById(cfg.bodyId);
     if (!linhas.length) {
       body.innerHTML = `<tr><td colspan="5" class="muted" style="text-align:center;padding:16px;">Nenhuma venda nesse período.</td></tr>`;
       return;
@@ -334,7 +365,16 @@
       const estoque = Number(p["Estoque AnyMarket disponível"] || 0);
       const custo = Number(p["Custo Unitário"] || 0);
       const preco = Number(p["Preço Atual"] || 0);
-      const margem = Number(p["_margem"] || 0);
+      // Antes usava a margem histórica de 12 meses (Lucro 12M / Faturamento
+      // 12M) pra estimar o lucro potencial do estoque parado. Isso dava
+      // valores sem sentido em produtos com pouco histórico de venda: um
+      // SKU com 1-2 vendas e um frete caro naquele pedido específico podia
+      // ter margem histórica de -300% ou +250%, e multiplicado pelo valor
+      // de todo o estoque parado, o "lucro potencial" saía completamente
+      // fora da realidade. Agora usa a margem simples e sempre coerente
+      // entre o preço de venda ATUAL e o custo ATUAL do produto — não
+      // depende de quantas vendas ele já teve.
+      const margem = preco > 0 ? (preco - custo) / preco : 0;
       const valorParado = estoque * custo;
       const valorPotencial = estoque * preco;
       const lucroPotencial = valorPotencial * margem;
@@ -714,23 +754,122 @@
     return { labels, values };
   }
 
+  // ------------------------------------------------------- financeiro por mês
+  // Em vez de depender só da janela rolante fixa ("Financeiro Diário" = só
+  // os últimos 30 dias, "Financeiro Mensal" = só os últimos 12 meses), o
+  // financeiro agora é calculado direto de state.transacoes (o histórico
+  // COMPLETO de RAW_Vendas, que já vem por venda), pra funcionar com
+  // qualquer mês que você escolher — não só os que ainda estão dentro da
+  // janela rolante da planilha.
+  function transacoesDoMes_(yyyyMM) {
+    return state.transacoes.filter((t) => (t.data || "").slice(0, 7) === yyyyMM);
+  }
+
+  function totaisFinanceiroMes_(yyyyMM) {
+    const txs = transacoesDoMes_(yyyyMM);
+    const base = txs.reduce((acc, t) => ({
+      faturamento: acc.faturamento + Number(t.faturamento || 0),
+      custo: acc.custo + Number(t.custo || 0),
+      taxa: acc.taxa + Number(t.taxa_ml || 0),
+      frete: acc.frete + Number(t.frete || 0),
+    }), { faturamento: 0, custo: 0, taxa: 0, frete: 0 });
+
+    // "Gasto Ads" é digitado manualmente na planilha (não vem do Mercado
+    // Livre) — só está disponível pros meses que ainda estão dentro da
+    // janela de 12 meses de "Financeiro Mensal". Fora disso, fica 0.
+    const mesInfo = state.financeiro_mensal.find((m) => (m.periodo || "").slice(0, 7) === yyyyMM);
+    const ads = mesInfo ? Number(mesInfo.gasto_ads || 0) : 0;
+    const semDadoAds = !mesInfo;
+
+    const lucro = base.faturamento - base.custo - base.taxa - base.frete - ads;
+    return { ...base, ads, lucro, semDadoAds };
+  }
+
+  // Série dia a dia de UM mês específico, sempre com todos os dias do mês
+  // (mesmo os sem venda, com 0) — calculada das transações, não de uma
+  // janela fixa, então funciona pra qualquer mês do histórico.
+  function serieDiariaDoMes_(yyyyMM) {
+    const [ano, mes] = yyyyMM.split("-").map(Number);
+    const diasNoMes = new Date(ano, mes, 0).getDate();
+    const porDia = {};
+    for (let d = 1; d <= diasNoMes; d++) {
+      const chave = String(d).padStart(2, "0");
+      porDia[chave] = { dia: chave, faturamento: 0, custo: 0, taxa: 0, frete: 0 };
+    }
+    transacoesDoMes_(yyyyMM).forEach((t) => {
+      const dia = (t.data || "").slice(8, 10);
+      if (!porDia[dia]) return;
+      porDia[dia].faturamento += Number(t.faturamento || 0);
+      porDia[dia].custo += Number(t.custo || 0);
+      porDia[dia].taxa += Number(t.taxa_ml || 0);
+      porDia[dia].frete += Number(t.frete || 0);
+    });
+    // Ads diário só existe de verdade pros dias que ainda estão dentro da
+    // janela rolante de 30 dias de "Financeiro Diário" — casa por data.
+    const adsPorDia = {};
+    state.financeiro_diario.forEach((d) => {
+      const iso = (d.periodo || "").slice(0, 10);
+      if (iso.slice(0, 7) === yyyyMM) adsPorDia[iso.slice(8, 10)] = Number(d.gasto_ads || 0);
+    });
+    return Object.values(porDia).map((d) => {
+      const ads = adsPorDia[d.dia] || 0;
+      return {
+        dia: d.dia,
+        faturamento: d.faturamento,
+        saidas: d.custo + d.taxa + d.frete + ads,
+        lucro: d.faturamento - d.custo - d.taxa - d.frete - ads,
+      };
+    });
+  }
+
+  // Lista de meses (yyyy-MM) que existem no histórico de transações, do
+  // mais recente pro mais antigo — sempre inclui o mês atual, mesmo sem
+  // venda ainda, pra dar pra escolher "hoje" desde o primeiro dia do mês.
+  function mesesDisponiveis_() {
+    const set = new Set();
+    state.transacoes.forEach((t) => {
+      const m = (t.data || "").slice(0, 7);
+      if (m) set.add(m);
+    });
+    const hoje = new Date();
+    set.add(`${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`);
+    return Array.from(set).sort().reverse();
+  }
+
+  function popularMesFinanceiroSelect_() {
+    const sel = document.getElementById("financeiroMesSelect");
+    const meses = mesesDisponiveis_();
+    const opts = meses.map((m) => `<option value="${m}">${fmtMesLabel_(m + "-01")}</option>`).join("");
+    if (sel.dataset.opcoes !== meses.join(",")) {
+      sel.innerHTML = opts;
+      sel.dataset.opcoes = meses.join(",");
+    }
+    if (state.mesFinanceiro && meses.includes(state.mesFinanceiro)) {
+      sel.value = state.mesFinanceiro;
+    } else {
+      state.mesFinanceiro = meses[0];
+      sel.value = state.mesFinanceiro;
+    }
+  }
+
+  document.getElementById("financeiroMesSelect").addEventListener("change", (e) => {
+    state.mesFinanceiro = e.target.value;
+    renderFinanceiro();
+  });
+
   function renderFinanceiro() {
-    const serie = state.financeiroView === "mensal" ? state.financeiro_mensal : state.financeiro_diario;
-    const totais = serie.reduce((acc, p) => ({
-      faturamento: acc.faturamento + Number(p.faturamento || 0),
-      custo: acc.custo + Number(p.custo || 0),
-      taxa: acc.taxa + Number(p.taxa_ml || 0),
-      frete: acc.frete + Number(p.frete || 0),
-      ads: acc.ads + Number(p.gasto_ads || 0),
-      lucro: acc.lucro + Number(p.lucro_liquido || 0),
-    }), { faturamento: 0, custo: 0, taxa: 0, frete: 0, ads: 0, lucro: 0 });
+    popularMesFinanceiroSelect_();
+    const yyyyMM = state.mesFinanceiro;
+    if (!yyyyMM) return;
+
+    const totais = totaisFinanceiroMes_(yyyyMM);
     const totalSaidas = totais.custo + totais.taxa + totais.frete + totais.ads;
     const margem = totais.faturamento ? (totais.lucro / totais.faturamento) : 0;
 
     document.getElementById("finKpiRow").innerHTML = `
       <div class="fin-kpi fin-kpi--in">
         <span class="fin-kpi__value">${fmtMoney(totais.faturamento)}</span>
-        <span class="fin-kpi__label">Entradas (faturamento)</span>
+        <span class="fin-kpi__label">Entradas (faturamento) — ${fmtMesLabel_(yyyyMM + "-01")}</span>
       </div>
       <div class="fin-kpi fin-kpi--out">
         <span class="fin-kpi__value">${fmtMoney(totalSaidas)}</span>
@@ -742,19 +881,40 @@
       </div>
       <div class="fin-kpi">
         <span class="fin-kpi__value">${fmtPct(margem)}</span>
-        <span class="fin-kpi__label">Margem líquida</span>
+        <span class="fin-kpi__label">Margem líquida${totais.semDadoAds ? " (ads não contabilizado — mês fora da janela salva)" : ""}</span>
       </div>`;
 
     if (!chartJsDisponivel_("financeiroChart")) return;
     if (financeiroChart) financeiroChart.destroy();
+
+    let labels, fatData, saidaData, lucroData;
+    if (state.financeiroView === "mensal") {
+      // Compara o mês escolhido com o mês imediatamente anterior a ele —
+      // dá contexto de tendência sem depender da janela fixa de 12 meses.
+      const [ano, mes] = yyyyMM.split("-").map(Number);
+      const anterior = new Date(ano, mes - 2, 1);
+      const yyyyMMAnterior = `${anterior.getFullYear()}-${String(anterior.getMonth() + 1).padStart(2, "0")}`;
+      const totaisAnterior = totaisFinanceiroMes_(yyyyMMAnterior);
+      labels = [fmtMesLabel_(yyyyMMAnterior + "-01"), fmtMesLabel_(yyyyMM + "-01")];
+      fatData = [totaisAnterior.faturamento, totais.faturamento];
+      saidaData = [totaisAnterior.custo + totaisAnterior.taxa + totaisAnterior.frete + totaisAnterior.ads, totalSaidas];
+      lucroData = [totaisAnterior.lucro, totais.lucro];
+    } else {
+      const dias = serieDiariaDoMes_(yyyyMM);
+      labels = dias.map((d) => d.dia);
+      fatData = dias.map((d) => d.faturamento);
+      saidaData = dias.map((d) => d.saidas);
+      lucroData = dias.map((d) => d.lucro);
+    }
+
     financeiroChart = new Chart(document.getElementById("financeiroChart"), {
       type: "bar",
       data: {
-        labels: serie.map((p) => (p.periodo || "").slice(state.financeiroView === "mensal" ? 0 : 5)),
+        labels,
         datasets: [
-          { label: "Faturamento", data: serie.map((p) => p.faturamento), backgroundColor: "#3DDC97" },
-          { label: "Custo + Taxas + Frete + Ads", data: serie.map((p) => Number(p.custo || 0) + Number(p.taxa_ml || 0) + Number(p.frete || 0) + Number(p.gasto_ads || 0)), backgroundColor: "#FF6B6B" },
-          { label: "Lucro líquido", data: serie.map((p) => p.lucro_liquido), type: "line", borderColor: "#5B9CFF", backgroundColor: "transparent", tension: 0.3, pointRadius: 2 },
+          { label: "Faturamento", data: fatData, backgroundColor: "#3DDC97" },
+          { label: "Custo + Taxas + Frete + Ads", data: saidaData, backgroundColor: "#FF6B6B" },
+          { label: "Lucro líquido", data: lucroData, type: "line", borderColor: "#5B9CFF", backgroundColor: "transparent", tension: 0.3, pointRadius: 2 },
         ],
       },
       options: {
@@ -1067,7 +1227,7 @@
   });
 
   // ---------------------------------------------------------------- init
-  initPeriodoPicker_();
+  initPeriodoPickers_();
   fetchData();
   setInterval(fetchData, 60000); // atualiza sozinho a cada 1 min
 })();

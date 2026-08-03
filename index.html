@@ -97,6 +97,43 @@
         <p class="hero__footnote">comparado com a média dos últimos 7 dias</p>
       </section>
 
+      <h2 class="section-title">O que vendeu hoje, produto a produto</h2>
+      <section class="panel periodo-panel" id="vendasHojePanel">
+        <div class="panel__header">
+          <h2 class="panel__title">📦 Vendas por produto <span class="muted">— com foto e link direto para o anúncio</span></h2>
+        </div>
+
+        <div class="periodo-picker">
+          <div class="periodo-picker__dates">
+            <label>De<input type="date" id="hojeDataDe"></label>
+            <label>Até<input type="date" id="hojeDataAte"></label>
+          </div>
+          <div class="preset-group" id="hojePeriodoPresets">
+            <button type="button" class="preset-btn" data-preset="hoje">Hoje</button>
+            <button type="button" class="preset-btn" data-preset="ontem">Ontem</button>
+            <button type="button" class="preset-btn" data-preset="7dias">Últimos 7 dias</button>
+            <button type="button" class="preset-btn" data-preset="mes">Este mês</button>
+          </div>
+        </div>
+
+        <div class="periodo-resumo" id="hojePeriodoResumo"></div>
+
+        <div class="table-wrap">
+          <table id="hojeDiaTable">
+            <thead>
+              <tr>
+                <th></th>
+                <th>SKU</th>
+                <th>Fornecedor</th>
+                <th class="num">Quantidade</th>
+                <th class="num">Faturamento</th>
+              </tr>
+            </thead>
+            <tbody id="hojeDiaBody"></tbody>
+          </table>
+        </div>
+      </section>
+
       <h2 class="section-title">O que fazer hoje</h2>
       <section class="panel" id="acoesHojePanel">
         <div class="panel__header">
@@ -300,9 +337,13 @@
       <h2 class="section-title">Financeiro</h2>
       <section class="panel financeiro">
         <div class="panel__header">
-          <div class="toggle-group" id="financeiroToggle">
-            <button type="button" class="toggle-btn active" data-view="mensal">Mensal</button>
-            <button type="button" class="toggle-btn" data-view="diario">Diário</button>
+          <h2 class="panel__title">Financeiro <span class="muted">— escolha o mês pra ver o total fechado e o dia a dia dele</span></h2>
+          <div class="fin-header-controls">
+            <select id="financeiroMesSelect" class="search-input" style="max-width:160px;flex:none;"></select>
+            <div class="toggle-group" id="financeiroToggle">
+              <button type="button" class="toggle-btn active" data-view="mensal">Mensal</button>
+              <button type="button" class="toggle-btn" data-view="diario">Diário</button>
+            </div>
           </div>
         </div>
         <div class="fin-kpi-row" id="finKpiRow"></div>
