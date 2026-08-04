@@ -40,10 +40,11 @@
     transacoes: [],
     financeiroView: "mensal",
     mesFinanceiro: null,
+    diaFinanceiro: null,
     contaFinanceiro: "ambas",
     periodoView: "dia",
     transModo: "detalhado",
-    sortKey: "Últimos 30 dias",
+    sortKey: "qtd30",
     sortDir: "desc",
     search: "",
     diretrizFiltro: new Set(),
@@ -120,6 +121,8 @@
       state.transacoes_2 = data.transacoes_2 || [];
       state.devolucoes = data.devolucoes || [];
       state.devolucoes_2 = data.devolucoes_2 || [];
+      state.produtos_conta1_raw = data.produtos_conta1_raw || [];
+      state.produtos_conta2_raw = data.produtos_conta2_raw || [];
 
       // Junta o Faturamento/Lucro em R$ (da Curva ABC) em cada produto,
       // pra mostrar valor real ao lado da nota A/B/C.
@@ -131,6 +134,11 @@
         p["_lucro_rs"] = c ? Number(c["Lucro 12M"] || 0) : 0;
         p["_margem"] = p["_fat_rs"] ? p["_lucro_rs"] / p["_fat_rs"] : 0;
       });
+
+      // Uma linha por ANÚNCIO (não por SKU) — se o mesmo SKU existir nas
+      // duas contas, aparece 2x, cada uma com seus próprios números. É
+      // calculado só uma vez aqui (não em cada tecla digitada na busca).
+      state.linhasProdutosPorConta = construirLinhasPorConta_();
 
       setSyncStatus("ok", data.gerado_em);
       render();
@@ -207,9 +215,14 @@
   }
 
   const MESES_ABREV = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  // Antes usava new Date(iso) pra extrair o mês — mas "YYYY-MM-DD" (sem
+  // hora) o JavaScript interpreta como meia-noite em UTC, e como o
+  // navegador está no fuso de Brasília (3h atrás), ao ler o mês de volta
+  // ele "voltava" pro dia anterior — fazendo agosto aparecer rotulado como
+  // julho, julho como junho, etc. Ler o texto direto evita isso de vez.
   function fmtMesLabel_(iso) {
-    const d = new Date(iso);
-    return `${MESES_ABREV[d.getMonth()]}/${String(d.getFullYear()).slice(2)}`;
+    const [ano, mes] = String(iso).split("-").map(Number);
+    return `${MESES_ABREV[mes - 1]}/${String(ano).slice(2)}`;
   }
 
   document.getElementById("mesASelect").addEventListener("change", renderComparativo);
@@ -361,7 +374,14 @@
 
   function renderEstoque() {
     const somenteSemCusto = document.getElementById("semCustoFiltro").checked;
+    const apenasComEstoque = document.getElementById("apenasComEstoqueFiltro").checked;
     let totalParado = 0, totalPotencial = 0, totalLucroPotencial = 0;
+    // Os 3 indicadores do topo (capital parado, valor potencial, lucro
+    // potencial) SEMPRE consideram só quem tem estoque de verdade (> 0) —
+    // produto zerado não representa capital parado nem venda potencial
+    // nenhuma. Isso é sempre assim, independente do checkbox abaixo, que só
+    // controla o que aparece NA LISTA (às vezes você quer ver o que já
+    // zerou, pra saber o que repor).
     let linhas = state.produtos.map((p) => {
       const estoque = Number(p["Estoque AnyMarket disponível"] || 0);
       const custo = Number(p["Custo Unitário"] || 0);
@@ -383,9 +403,17 @@
       const valorParado = estoque * custo;
       const valorPotencial = estoque * preco;
       const lucroPotencial = valorPotencial * margem;
-      totalParado += valorParado;
-      totalPotencial += valorPotencial;
-      totalLucroPotencial += lucroPotencial;
+      // Os 3 indicadores do topo (capital parado, valor potencial, lucro
+      // potencial) SEMPRE consideram só quem tem estoque de verdade (> 0) —
+      // produto zerado não representa capital parado nem venda potencial
+      // nenhuma. Isso é sempre assim, independente do checkbox "só com
+      // estoque" abaixo, que só controla o que aparece NA LISTA (às vezes
+      // você quer ver o que já zerou, pra saber o que repor).
+      if (estoque > 0) {
+        totalParado += valorParado;
+        totalPotencial += valorPotencial;
+        totalLucroPotencial += lucroPotencial;
+      }
       return { sku: p["SKUs"], foto: p["Foto URL"], link: p["Link Anúncio"], estoque, custo, valorParado, preco, precoOriginal, margem, lucroPotencial };
     }).sort((a, b) => b.valorParado - a.valorParado);
 
@@ -404,6 +432,7 @@
       </div>`;
 
     if (somenteSemCusto) linhas = linhas.filter((l) => !l.custo);
+    if (apenasComEstoque) linhas = linhas.filter((l) => l.estoque > 0);
 
     document.getElementById("estoqueBody").innerHTML = linhas.map((l) => `
       <tr>
@@ -426,6 +455,7 @@
   }
 
   document.getElementById("semCustoFiltro").addEventListener("change", renderEstoque);
+  document.getElementById("apenasComEstoqueFiltro").addEventListener("change", renderEstoque);
 
   async function salvarCusto_(input) {
     const sku = input.dataset.sku;
@@ -539,15 +569,142 @@
     set.has(val) ? set.delete(val) : set.add(val);
   }
 
+  // Constrói 1 linha por ANÚNCIO (SKU + conta), sem consolidar entre
+  // contas — se o mesmo SKU existir nas duas, aparece 2 vezes, cada uma
+  // com seus próprios números de estoque, preço, vendas, faturamento e
+  // lucro. Calculado 1x quando os dados chegam, não em cada tecla digitada.
+  function construirLinhasPorConta_() {
+    // Custo, Classificação e DIRETRIZ continuam vindo do SKU combinado
+    // (Fluxo por SKU) — é a mesma peça física e a mesma classificação
+    // estratégica, então não faz sentido duplicar isso por conta.
+    const custoPorSku = {}, diretrizPorSku = {}, classifPorSku = {};
+    state.produtos.forEach((p) => {
+      custoPorSku[p["SKUs"]] = Number(p["Custo Unitário"] || 0);
+      diretrizPorSku[p["SKUs"]] = p["DIRETRIZ"];
+      classifPorSku[p["SKUs"]] = p["Classificação"];
+    });
+
+    const hojeIso = isoDate_(new Date());
+    const ontemD = new Date(); ontemD.setDate(ontemD.getDate() - 1);
+    const ontemIso = isoDate_(ontemD);
+
+    function metricas_(sku, porSkuMap) {
+      const doSku = porSkuMap[sku] || [];
+      const somaDesde = (dias, campo) => {
+        const limite = new Date(); limite.setDate(limite.getDate() - dias);
+        const limiteIso = isoDate_(limite);
+        return doSku.filter((t) => (t.data || "") >= limiteIso).reduce((s, t) => s + Number(t[campo] || 0), 0);
+      };
+      const somaExata = (diaIso, campo) => doSku.filter((t) => t.data === diaIso).reduce((s, t) => s + Number(t[campo] || 0), 0);
+      const datas = doSku.map((t) => t.data).filter(Boolean).sort();
+
+      return {
+        qtdHoje: somaExata(hojeIso, "quantidade"),
+        qtdOntem: somaExata(ontemIso, "quantidade"),
+        qtd7: somaDesde(7, "quantidade"),
+        qtd15: somaDesde(15, "quantidade"),
+        qtd30: somaDesde(30, "quantidade"),
+        // "período anterior" (ex: dias -14 a -7) — usado só pra calcular a evolução
+        qtdPrev7: somaDesde(14, "quantidade") - somaDesde(7, "quantidade"),
+        qtdPrev30: somaDesde(60, "quantidade") - somaDesde(30, "quantidade"),
+        fat12m: somaDesde(365, "faturamento"),
+        lucro12m: somaDesde(365, "lucro"),
+        ultimaVenda: datas.length ? datas[datas.length - 1] : null,
+      };
+    }
+
+    function situacao_(estoque, mediaVendasDia, ultimaVenda) {
+      if (!ultimaVenda) return { texto: "Produto novo", classe: "foco", emoji: "🔵" };
+      if (mediaVendasDia <= 0) return { texto: "Sem vendas", classe: "ignorar", emoji: "⚫" };
+      const dre = estoque / mediaVendasDia;
+      if (dre <= 3) return { texto: "Comprar urgente", classe: "saida", emoji: "🔴" };
+      if (dre <= 10) return { texto: "Estoque baixo", classe: "baixo", emoji: "🟠" };
+      if (dre <= 30) return { texto: "Atenção", classe: "despriorizado", emoji: "🟡" };
+      return { texto: "Estoque saudável", classe: "manutencao", emoji: "🟢" };
+    }
+
+    function construirConta_(raw, conta, porSkuMap) {
+      const sku = raw.sku;
+      const estoque = Number(raw.estoque || 0);
+      const custo = custoPorSku[sku] !== undefined ? custoPorSku[sku] : Number(raw.custo || 0);
+      const met = metricas_(sku, porSkuMap);
+      const mediaVendasDia = met.qtd30 / 30;
+      const diasRestantes = mediaVendasDia > 0 ? estoque / mediaVendasDia : null;
+      const evolucao30 = met.qtdPrev30 > 0 ? (met.qtd30 - met.qtdPrev30) / met.qtdPrev30 : (met.qtd30 > 0 ? 1 : 0);
+      const sit = situacao_(estoque, mediaVendasDia, met.ultimaVenda);
+      // Velocidade dos últimos 15 dias, mesmo critério já usado em "Fluxo
+      // por SKU" pra prever ruptura — só que agora calculado por conta.
+      const vel15 = met.qtd15 / 15;
+      const diasRuptura = vel15 > 0 ? Math.round(estoque / vel15) : (estoque > 0 ? null : 0);
+
+      return {
+        sku, conta, fornecedor: raw.fornecedor, categoria: raw.categoria, foto: raw.foto, link: raw.link,
+        estoque, estoqueWms: Number(raw.estoque_wms || 0),
+        precoOriginal: Number(raw.preco_original || 0), precoAtual: Number(raw.preco_atual || 0),
+        custo,
+        qtdHoje: met.qtdHoje, qtdOntem: met.qtdOntem, qtd7: met.qtd7, qtd15: met.qtd15, qtd30: met.qtd30,
+        evolucao30,
+        mediaVendasDia,
+        diasRestantes,
+        diasRestantesOrdenacao: diasRestantes === null ? (estoque > 0 ? 999999 : -1) : diasRestantes,
+        ultimaVenda: met.ultimaVenda,
+        ultimaVendaOrdenacao: met.ultimaVenda ? new Date(met.ultimaVenda).getTime() : -1,
+        fat12m: met.fat12m, lucro12m: met.lucro12m,
+        margem: met.fat12m ? met.lucro12m / met.fat12m : 0,
+        situacao: sit, situacaoOrdenacao: sit.texto,
+        diasRuptura,
+        diasRupturaOrdenacao: diasRuptura === null ? (estoque > 0 ? 999999 : -1) : diasRuptura,
+        classificacao: classifPorSku[sku] || "-",
+        diretriz: diretrizPorSku[sku] || "⚫ IGNORAR",
+      };
+    }
+
+    const porSku1 = {}, porSku2 = {};
+    state.transacoes.forEach((t) => { (porSku1[t.sku] = porSku1[t.sku] || []).push(t); });
+    state.transacoes_2.forEach((t) => { (porSku2[t.sku] = porSku2[t.sku] || []).push(t); });
+
+    const linhas = [];
+    (state.produtos_conta1_raw || []).forEach((raw) => linhas.push(construirConta_(raw, "1", porSku1)));
+    (state.produtos_conta2_raw || []).forEach((raw) => linhas.push(construirConta_(raw, "2", porSku2)));
+    return linhas;
+  }
+
+  function fmtUltimaVenda_(iso) {
+    if (!iso) return "Nunca vendeu";
+    const hoje = isoDate_(new Date());
+    if (iso === hoje) return "Hoje";
+    const ontemD = new Date(); ontemD.setDate(ontemD.getDate() - 1);
+    if (iso === isoDate_(ontemD)) return "Ontem";
+    const dias = Math.round((new Date(hoje + "T12:00:00") - new Date(iso + "T12:00:00")) / 86400000);
+    return `Há ${dias} dias`;
+  }
+
+  function fmtMediaVendasDia_(n) {
+    return n.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "/dia";
+  }
+
+  function fmtDiasRestantes_(dias, estoque) {
+    if (dias === null || dias === undefined) {
+      return estoque > 0 ? `<span class="badge badge--ignorar">-</span>` : `<span class="badge badge--saida">0d</span>`;
+    }
+    const n = Math.round(dias);
+    const classe = n <= 3 ? "saida" : n <= 10 ? "baixo" : n <= 30 ? "despriorizado" : "manutencao";
+    return `<span class="badge badge--${classe}">${n}d</span>`;
+  }
+
+  function fmtSituacao_(sit) {
+    return `<span class="badge badge--${sit.classe}">${sit.emoji} ${escapeHtml(sit.texto)}</span>`;
+  }
+
   function filteredSortedProducts() {
     const term = state.search.trim().toLowerCase();
-    let rows = state.produtos.filter((p) => {
+    let rows = (state.linhasProdutosPorConta || []).filter((p) => {
       if (term) {
-        const hay = `${p["SKUs"] ?? ""} ${p["Fornecedor"] ?? ""} ${p["Categorias"] ?? ""}`.toLowerCase();
+        const hay = `${p.sku ?? ""} ${p.fornecedor ?? ""} ${p.categoria ?? ""}`.toLowerCase();
         if (!hay.includes(term)) return false;
       }
-      if (state.diretrizFiltro.size && !state.diretrizFiltro.has(p["DIRETRIZ"])) return false;
-      if (state.classifFiltro.size && !state.classifFiltro.has(p["Classificação"])) return false;
+      if (state.diretrizFiltro.size && !state.diretrizFiltro.has(p.diretriz)) return false;
+      if (state.classifFiltro.size && !state.classifFiltro.has(p.classificacao)) return false;
       return true;
     });
     rows.sort((a, b) => {
@@ -612,24 +769,30 @@
     els.rowCount.textContent = `(${rows.length})`;
     els.productsBody.innerHTML = rows.map((p, i) => `
       <tr class="data-row" data-idx="${i}">
-        <td>${fmtFoto(p["Foto URL"])}</td>
-        <td>${fmtSkuLink(p["SKUs"], p["Link Anúncio"])}</td>
-        <td>${fmtContaBadge(p["Contas"], p["Link Anúncio Conta 2"])}</td>
-        <td>${escapeHtml(p["Fornecedor"] ?? "-")}</td>
-        <td>${escapeHtml(p["Categorias"] ?? "-")}</td>
-        <td class="num">${fmtPrecoComPromo(p["Preço Original"], p["Preço Atual"])}</td>
-        <td class="num">${fmtNum(p["Estoque AnyMarket disponível"])}</td>
-        <td class="num">${fmtNum(p["Estoque WMS"])}</td>
-        <td class="num">${fmtNum(p["Últimos 7 dias"])}</td>
-        <td class="num">${fmtNum(p["Últimos 15 dias"])}</td>
-        <td class="num">${fmtNum(p["Últimos 30 dias"])}</td>
-        <td class="num">${fmtPct(p["Evolução últimos 30 dias"])}</td>
-        <td class="num">${fmtMoney(p["_fat_rs"])}</td>
-        <td class="num">${fmtMoney(p["_lucro_rs"])}</td>
-        <td class="num">${fmtPct(p["_margem"])}</td>
-        <td class="num">${fmtRupturaBadge(p["Dias até Ruptura"])}</td>
-        <td>${badge(p["Classificação"], "classif")}</td>
-        <td>${badge(p["DIRETRIZ"])}</td>
+        <td>${fmtFoto(p.foto)}</td>
+        <td>${fmtSkuLink(p.sku, p.link)}</td>
+        <td><span class="conta-badge conta-badge--${p.conta}">${p.conta}</span></td>
+        <td>${escapeHtml(p.fornecedor ?? "-")}</td>
+        <td>${escapeHtml(p.categoria ?? "-")}</td>
+        <td class="num">${fmtPrecoComPromo(p.precoOriginal, p.precoAtual)}</td>
+        <td class="num">${fmtNum(p.estoque)}</td>
+        <td class="num">${fmtNum(p.estoqueWms)}</td>
+        <td class="num">${fmtNum(p.qtdHoje)}</td>
+        <td class="num">${fmtNum(p.qtdOntem)}</td>
+        <td class="num">${fmtNum(p.qtd7)}</td>
+        <td class="num">${fmtNum(p.qtd15)}</td>
+        <td class="num">${fmtNum(p.qtd30)}</td>
+        <td class="num">${fmtPct(p.evolucao30)}</td>
+        <td class="num">${fmtMediaVendasDia_(p.mediaVendasDia)}</td>
+        <td class="num">${fmtUltimaVenda_(p.ultimaVenda)}</td>
+        <td class="num">${fmtDiasRestantes_(p.diasRestantes, p.estoque)}</td>
+        <td class="num">${fmtMoney(p.fat12m)}</td>
+        <td class="num">${fmtMoney(p.lucro12m)}</td>
+        <td class="num">${fmtPct(p.margem)}</td>
+        <td class="num">${fmtRupturaBadge(p.diasRuptura === null ? "-" : p.diasRuptura)}</td>
+        <td>${fmtSituacao_(p.situacao)}</td>
+        <td>${badge(p.classificacao, "classif")}</td>
+        <td>${badge(p.diretriz)}</td>
       </tr>`).join("");
 
     els.productsBody.querySelectorAll(".data-row").forEach((tr) => {
@@ -647,7 +810,7 @@
     const detailRow = tr.nextElementSibling;
     const canvas = detailRow.querySelector("canvas");
 
-    const serie = (state.saida_diaria.find((d) => d.sku === product["SKUs"]) || {}).serie || [];
+    const serie = (state.saida_diaria.find((d) => d.sku === product.sku) || {}).serie || [];
     if (typeof Chart === "undefined") {
       canvas.insertAdjacentHTML("afterend", `<p class="chart-erro">⚠️ Biblioteca de gráficos não carregou — recarregue a página.</p>`);
       return;
@@ -665,7 +828,7 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false }, title: { display: true, text: `Saída diária — ${product["SKUs"]}`, font: { size: 11 } } },
+        plugins: { legend: { display: false }, title: { display: true, text: `Saída diária — ${product.sku}`, font: { size: 11 } } },
         scales: { x: { ticks: { font: { size: 9 } } }, y: { ticks: { font: { size: 9 } }, beginAtZero: true } },
       },
     });
@@ -687,15 +850,6 @@
 
   function renderCharts() {
     renderDailyChart();
-
-    if (!chartJsDisponivel_("monthlyChart")) return;
-    const monthlyTotals = aggregateSeries(state.saida_mensal);
-    if (monthlyChart) monthlyChart.destroy();
-    monthlyChart = new Chart(document.getElementById("monthlyChart"), {
-      type: "bar",
-      data: { labels: monthlyTotals.labels, datasets: [{ data: monthlyTotals.values, backgroundColor: "#3DDC97" }] },
-      options: chartOptions(),
-    });
   }
 
   function renderDailyChart() {
@@ -794,23 +948,8 @@
   function totaisFinanceiroMes_(yyyyMM, conta) {
     const contaEfetiva = conta || state.contaFinanceiro;
     const txs = transacoesDoMes_(yyyyMM, contaEfetiva);
-    const base = txs.reduce((acc, t) => ({
-      faturamento: acc.faturamento + Number(t.faturamento || 0),
-      custo: acc.custo + Number(t.custo || 0),
-      taxa: acc.taxa + Number(t.taxa_ml || 0),
-      frete: acc.frete + Number(t.frete || 0),
-    }), { faturamento: 0, custo: 0, taxa: 0, frete: 0 });
-
-    const pedidosPagos = new Set(txs.map((t) => t.pedido_id).filter(Boolean));
     const devolucoes = devolucoesDoMes_(yyyyMM, contaEfetiva);
-    const pedidosDevolvidos = new Set(devolucoes.map((d) => d.pedido_id).filter(Boolean));
-    const valorDevolvido = devolucoes.reduce((s, d) => s + Number(d.valor_reembolsado || 0), 0);
-    // O pedido devolvido já saiu de RAW_Vendas (por isso não está em "txs"),
-    // então pro total de pedidos pagos do mês precisamos somar os dois: os
-    // que ainda estão contando como venda + os que foram pagos e depois
-    // devolvidos. Sem isso, a taxa de devolução ficaria artificialmente alta.
-    const totalPedidosNoMes = pedidosPagos.size + pedidosDevolvidos.size;
-    const taxaDevolucao = totalPedidosNoMes ? pedidosDevolvidos.size / totalPedidosNoMes : 0;
+    const agregado = agregarFinanceiro_(txs, devolucoes);
 
     // "Gasto Ads" é digitado manualmente na planilha, pra CONTA 1 e sem
     // divisão por conta — só entra na conta quando a visão é "Ambas"
@@ -821,11 +960,65 @@
     const ads = contaEfetiva === "ambas" && mesInfo ? Number(mesInfo.gasto_ads || 0) : 0;
     const semDadoAds = contaEfetiva === "ambas" ? !mesInfo : true;
 
-    const lucro = base.faturamento - base.custo - base.taxa - base.frete - ads;
+    const lucro = agregado.faturamento - agregado.custo - agregado.taxa - agregado.frete - ads;
+    return { ...agregado, ads, lucro, semDadoAds };
+  }
+
+  // Reúne os totais de faturamento/custo/taxa/frete + devoluções de uma
+  // lista de transações — usado tanto pro mês inteiro quanto pra um único
+  // dia, pra não duplicar essa conta duas vezes.
+  function agregarFinanceiro_(txs, devolucoes) {
+    const base = txs.reduce((acc, t) => ({
+      faturamento: acc.faturamento + Number(t.faturamento || 0),
+      custo: acc.custo + Number(t.custo || 0),
+      taxa: acc.taxa + Number(t.taxa_ml || 0),
+      frete: acc.frete + Number(t.frete || 0),
+    }), { faturamento: 0, custo: 0, taxa: 0, frete: 0 });
+
+    const pedidosPagos = new Set(txs.map((t) => t.pedido_id).filter(Boolean));
+    const pedidosDevolvidos = new Set(devolucoes.map((d) => d.pedido_id).filter(Boolean));
+    const valorDevolvido = devolucoes.reduce((s, d) => s + Number(d.valor_reembolsado || 0), 0);
+    // O pedido devolvido já saiu de RAW_Vendas (por isso não está em "txs"),
+    // então pro total de pedidos do período precisamos somar os dois: os
+    // que ainda estão contando como venda + os que foram pagos e depois
+    // devolvidos. Sem isso, a taxa de devolução ficaria artificialmente alta.
+    const totalPedidosNoPeriodo = pedidosPagos.size + pedidosDevolvidos.size;
+    const taxaDevolucao = totalPedidosNoPeriodo ? pedidosDevolvidos.size / totalPedidosNoPeriodo : 0;
+
     return {
-      ...base, ads, lucro, semDadoAds,
-      numDevolucoes: pedidosDevolvidos.size, valorDevolvido, taxaDevolucao,
+      ...base,
+      numPedidos: pedidosPagos.size,
+      numDevolucoes: pedidosDevolvidos.size,
+      valorDevolvido,
+      taxaDevolucao,
     };
+  }
+
+  // ------------------------------------------------------- visão por dia
+  function transacoesDoDiaFin_(isoDia, conta) {
+    return transacoesPorConta_(conta || state.contaFinanceiro).filter((t) => (t.data || "") === isoDia);
+  }
+
+  function devolucoesDoDiaFin_(isoDia, conta) {
+    return devolucoesPorConta_(conta || state.contaFinanceiro)
+      .filter((d) => (d.data || "") === isoDia && d.tipo === "Devolução");
+  }
+
+  function totaisFinanceiroDia_(isoDia, conta) {
+    const contaEfetiva = conta || state.contaFinanceiro;
+    const txs = transacoesDoDiaFin_(isoDia, contaEfetiva);
+    const devolucoes = devolucoesDoDiaFin_(isoDia, contaEfetiva);
+    const agregado = agregarFinanceiro_(txs, devolucoes);
+
+    // Ads do dia só existe de verdade se esse dia ainda estiver dentro da
+    // janela rolante de 30 dias de "Financeiro Diário" (dado manual, sem
+    // divisão por conta) — mesma regra do mês: só aplica em "Ambas".
+    const diaInfo = state.financeiro_diario.find((d) => (d.periodo || "").slice(0, 10) === isoDia);
+    const ads = contaEfetiva === "ambas" && diaInfo ? Number(diaInfo.gasto_ads || 0) : 0;
+    const semDadoAds = contaEfetiva === "ambas" ? !diaInfo : true;
+
+    const lucro = agregado.faturamento - agregado.custo - agregado.taxa - agregado.frete - ads;
+    return { ...agregado, ads, lucro, semDadoAds };
   }
 
   // Série dia a dia de UM mês específico, sempre com todos os dias do mês
@@ -884,6 +1077,36 @@
     return Array.from(set).sort().reverse();
   }
 
+  function mesAnteriorDe_(yyyyMM) {
+    const [ano, mes] = yyyyMM.split("-").map(Number);
+    const d = new Date(ano, mes - 2, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+
+  function diasNoMes_(yyyyMM) {
+    const [ano, mes] = yyyyMM.split("-").map(Number);
+    return new Date(ano, mes, 0).getDate();
+  }
+
+  function fmtDiaLabel_(iso) {
+    const [ano, mes, dia] = String(iso).split("-");
+    return `${dia}/${mes}/${ano}`;
+  }
+
+  // % de variação de "atual" vs "anterior" — null quando não há base de
+  // comparação (mês anterior sem nenhum dado), pra não mostrar "∞%".
+  function variacaoPct_(atual, anterior) {
+    if (!anterior) return null;
+    return (atual - anterior) / Math.abs(anterior);
+  }
+
+  function fmtDelta_(pct) {
+    if (pct === null || pct === undefined || !isFinite(pct)) return "";
+    const seta = pct >= 0 ? "▲" : "▼";
+    const classe = pct >= 0 ? "up" : "down";
+    return ` <span class="fin-kpi__delta fin-kpi__delta--${classe}">${seta} ${Math.abs(pct * 100).toFixed(0)}% vs mês anterior</span>`;
+  }
+
   function popularMesFinanceiroSelect_() {
     const sel = document.getElementById("financeiroMesSelect");
     const meses = mesesDisponiveis_();
@@ -905,12 +1128,59 @@
     renderFinanceiro();
   });
 
+  document.getElementById("financeiroDiaSelect").addEventListener("change", (e) => {
+    state.diaFinanceiro = e.target.value;
+    renderFinanceiro();
+  });
+
+  function mudarDia_(delta) {
+    const atual = state.diaFinanceiro ? new Date(state.diaFinanceiro + "T12:00:00") : new Date();
+    atual.setDate(atual.getDate() + delta);
+    state.diaFinanceiro = isoDate_(atual);
+    document.getElementById("financeiroDiaSelect").value = state.diaFinanceiro;
+    renderFinanceiro();
+  }
+  document.getElementById("diaAnteriorBtn").addEventListener("click", () => mudarDia_(-1));
+  document.getElementById("diaProximoBtn").addEventListener("click", () => mudarDia_(1));
+
   function renderFinanceiro() {
+    const noModoDia = state.financeiroView === "diario";
+    document.getElementById("financeiroMesSelect").classList.toggle("hidden", noModoDia);
+    document.getElementById("financeiroDiaControles").classList.toggle("hidden", !noModoDia);
+
     popularMesFinanceiroSelect_();
+    if (noModoDia && !state.diaFinanceiro) state.diaFinanceiro = isoDate_(new Date());
+    if (noModoDia) document.getElementById("financeiroDiaSelect").value = state.diaFinanceiro;
+
     const yyyyMM = state.mesFinanceiro;
     if (!yyyyMM) return;
 
-    const totais = totaisFinanceiroMes_(yyyyMM);
+    // No modo Diário, tudo é calculado pro dia escolhido; a "referência
+    // anterior" pra mostrar a variação é a MÉDIA diária do mês passado
+    // (não faz sentido comparar 1 dia com 1 mês inteiro). No modo Mensal,
+    // a referência é simplesmente o mês anterior completo.
+    const yyyyMMAnterior = mesAnteriorDe_(noModoDia ? state.diaFinanceiro.slice(0, 7) : yyyyMM);
+    const totaisMesAnterior = totaisFinanceiroMes_(yyyyMMAnterior);
+    const diasMesAnterior = diasNoMes_(yyyyMMAnterior);
+
+    let totais, tituloPeriodo, refFaturamento, refSaidas, refLucro, refMargem;
+    if (noModoDia) {
+      totais = totaisFinanceiroDia_(state.diaFinanceiro);
+      tituloPeriodo = fmtDiaLabel_(state.diaFinanceiro);
+      const divisor = diasMesAnterior || 1;
+      refFaturamento = totaisMesAnterior.faturamento / divisor;
+      refSaidas = (totaisMesAnterior.custo + totaisMesAnterior.taxa + totaisMesAnterior.frete + totaisMesAnterior.ads) / divisor;
+      refLucro = totaisMesAnterior.lucro / divisor;
+      refMargem = totaisMesAnterior.faturamento ? totaisMesAnterior.lucro / totaisMesAnterior.faturamento : null;
+    } else {
+      totais = totaisFinanceiroMes_(yyyyMM);
+      tituloPeriodo = fmtMesLabel_(yyyyMM + "-01");
+      refFaturamento = totaisMesAnterior.faturamento;
+      refSaidas = totaisMesAnterior.custo + totaisMesAnterior.taxa + totaisMesAnterior.frete + totaisMesAnterior.ads;
+      refLucro = totaisMesAnterior.lucro;
+      refMargem = totaisMesAnterior.faturamento ? totaisMesAnterior.lucro / totaisMesAnterior.faturamento : null;
+    }
+
     const totalSaidas = totais.custo + totais.taxa + totais.frete + totais.ads;
     const margem = totais.faturamento ? (totais.lucro / totais.faturamento) : 0;
     const rotuloConta = state.contaFinanceiro === "1" ? " — Conta 1" : state.contaFinanceiro === "2" ? " — Conta 2" : "";
@@ -918,25 +1188,33 @@
     document.getElementById("finKpiRow").innerHTML = `
       <div class="fin-kpi fin-kpi--in">
         <span class="fin-kpi__value">${fmtMoney(totais.faturamento)}</span>
-        <span class="fin-kpi__label">Entradas (faturamento) — ${fmtMesLabel_(yyyyMM + "-01")}${rotuloConta}</span>
+        <span class="fin-kpi__label">Entradas (faturamento) — ${tituloPeriodo}${rotuloConta}</span>
+        ${fmtDelta_(variacaoPct_(totais.faturamento, refFaturamento))}
       </div>
       <div class="fin-kpi fin-kpi--out">
         <span class="fin-kpi__value">${fmtMoney(totalSaidas)}</span>
         <span class="fin-kpi__label">Saídas (produto + taxa ML + frete + ads)</span>
+        ${fmtDelta_(variacaoPct_(totalSaidas, refSaidas))}
       </div>
       <div class="fin-kpi fin-kpi--profit">
         <span class="fin-kpi__value">${fmtMoney(totais.lucro)}</span>
         <span class="fin-kpi__label">Lucro líquido (após ads)</span>
+        ${fmtDelta_(variacaoPct_(totais.lucro, refLucro))}
       </div>
       <div class="fin-kpi">
         <span class="fin-kpi__value">${fmtPct(margem)}</span>
         <span class="fin-kpi__label">Margem líquida${totais.semDadoAds ? " (ads não contabilizado nessa visão)" : ""}</span>
+        ${refMargem !== null ? fmtDelta_(variacaoPct_(margem, refMargem)) : ""}
       </div>`;
 
     document.getElementById("finDevolucoesRow").innerHTML = `
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtNum(totais.numPedidos)}</span>
+        <span class="fin-kpi__label">Quantidade de pedidos</span>
+      </div>
       <div class="fin-kpi fin-kpi--out">
         <span class="fin-kpi__value">${fmtNum(totais.numDevolucoes)}</span>
-        <span class="fin-kpi__label">Devoluções no mês (produto entregue e revertido)</span>
+        <span class="fin-kpi__label">Devoluções (produto entregue e revertido)</span>
       </div>
       <div class="fin-kpi fin-kpi--out">
         <span class="fin-kpi__value">${fmtMoney(totais.valorDevolvido)}</span>
@@ -948,12 +1226,11 @@
       </div>`;
 
     // Quando a visão é "Ambas", mostra embaixo quanto foi faturado em CADA
-    // conta separadamente — é o pedido de "as duas juntas, e embaixo o que
-    // foi faturado em cada uma delas".
+    // conta separadamente — no período (mês ou dia) que estiver selecionado.
     const breakdown = document.getElementById("finContaBreakdown");
     if (state.contaFinanceiro === "ambas" && (state.transacoes_2.length || state.transacoes.length)) {
-      const totaisConta1 = totaisFinanceiroMes_(yyyyMM, "1");
-      const totaisConta2 = totaisFinanceiroMes_(yyyyMM, "2");
+      const totaisConta1 = noModoDia ? totaisFinanceiroDia_(state.diaFinanceiro, "1") : totaisFinanceiroMes_(yyyyMM, "1");
+      const totaisConta2 = noModoDia ? totaisFinanceiroDia_(state.diaFinanceiro, "2") : totaisFinanceiroMes_(yyyyMM, "2");
       breakdown.innerHTML = `
         <div class="fin-kpi">
           <span class="fin-kpi__value">${fmtMoney(totaisConta1.faturamento)}</span>
@@ -972,20 +1249,17 @@
     if (!chartJsDisponivel_("financeiroChart")) return;
     if (financeiroChart) financeiroChart.destroy();
 
+    // O gráfico continua no mesmo formato de sempre: no modo Mensal,
+    // compara o mês escolhido com o anterior; no modo Diário, mostra o
+    // dia a dia do MÊS que contém o dia escolhido, pra dar contexto.
     let labels, fatData, saidaData, lucroData;
-    if (state.financeiroView === "mensal") {
-      // Compara o mês escolhido com o mês imediatamente anterior a ele —
-      // dá contexto de tendência sem depender da janela fixa de 12 meses.
-      const [ano, mes] = yyyyMM.split("-").map(Number);
-      const anterior = new Date(ano, mes - 2, 1);
-      const yyyyMMAnterior = `${anterior.getFullYear()}-${String(anterior.getMonth() + 1).padStart(2, "0")}`;
-      const totaisAnterior = totaisFinanceiroMes_(yyyyMMAnterior);
+    if (!noModoDia) {
       labels = [fmtMesLabel_(yyyyMMAnterior + "-01"), fmtMesLabel_(yyyyMM + "-01")];
-      fatData = [totaisAnterior.faturamento, totais.faturamento];
-      saidaData = [totaisAnterior.custo + totaisAnterior.taxa + totaisAnterior.frete + totaisAnterior.ads, totalSaidas];
-      lucroData = [totaisAnterior.lucro, totais.lucro];
+      fatData = [totaisMesAnterior.faturamento, totais.faturamento];
+      saidaData = [totaisMesAnterior.custo + totaisMesAnterior.taxa + totaisMesAnterior.frete + totaisMesAnterior.ads, totalSaidas];
+      lucroData = [totaisMesAnterior.lucro, totais.lucro];
     } else {
-      const dias = serieDiariaDoMes_(yyyyMM);
+      const dias = serieDiariaDoMes_(state.diaFinanceiro.slice(0, 7));
       labels = dias.map((d) => d.dia);
       fatData = dias.map((d) => d.faturamento);
       saidaData = dias.map((d) => d.saidas);

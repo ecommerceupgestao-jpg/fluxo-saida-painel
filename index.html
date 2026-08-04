@@ -222,22 +222,16 @@
           <div class="chip-group" id="classifFilters" aria-label="Filtrar por classificação"></div>
         </section>
 
-        <section class="grid-2">
-          <div class="panel">
-            <div class="panel__header">
-              <h2 class="panel__title">Saída por período</h2>
-              <div class="toggle-group" id="periodoToggle">
-                <button type="button" class="toggle-btn active" data-periodo="dia">Dia</button>
-                <button type="button" class="toggle-btn" data-periodo="semana">Semana</button>
-                <button type="button" class="toggle-btn" data-periodo="mes">Mês</button>
-              </div>
+        <section class="panel">
+          <div class="panel__header">
+            <h2 class="panel__title">Saída por período</h2>
+            <div class="toggle-group" id="periodoToggle">
+              <button type="button" class="toggle-btn active" data-periodo="dia">Dia</button>
+              <button type="button" class="toggle-btn" data-periodo="semana">Semana</button>
+              <button type="button" class="toggle-btn" data-periodo="mes">Mês</button>
             </div>
-            <div class="chart-box"><canvas id="dailyChart"></canvas></div>
           </div>
-          <div class="panel">
-            <h2 class="panel__title">Saída mensal — últimos 12 meses</h2>
-            <div class="chart-box"><canvas id="monthlyChart"></canvas></div>
-          </div>
+          <div class="chart-box"><canvas id="dailyChart"></canvas></div>
         </section>
 
         <section class="panel">
@@ -249,23 +243,29 @@
               <thead>
                 <tr>
                   <th></th>
-                  <th data-key="SKUs">SKU</th>
-                  <th>Conta</th>
-                  <th data-key="Fornecedor">Fornecedor</th>
-                  <th data-key="Categorias">Categoria</th>
-                  <th data-key="Preço Atual" class="num">Preço</th>
-                  <th data-key="Estoque AnyMarket disponível" class="num">Estoque</th>
-                  <th data-key="Estoque WMS" class="num">Estoque WMS</th>
-                  <th data-key="Últimos 7 dias" class="num">7 dias</th>
-                  <th data-key="Últimos 15 dias" class="num">15 dias</th>
-                  <th data-key="Últimos 30 dias" class="num">30 dias</th>
-                  <th data-key="Evolução últimos 30 dias" class="num">Evol. 30d</th>
-                  <th data-key="_fat_rs" class="num">Faturamento 12M</th>
-                  <th data-key="_lucro_rs" class="num">Lucro 12M</th>
-                  <th data-key="_margem" class="num">Margem %</th>
-                  <th data-key="Dias até Ruptura" class="num">Ruptura</th>
-                  <th data-key="Classificação">Classificação</th>
-                  <th data-key="DIRETRIZ">DIRETRIZ</th>
+                  <th data-key="sku">SKU</th>
+                  <th data-key="conta">Conta</th>
+                  <th data-key="fornecedor">Fornecedor</th>
+                  <th data-key="categoria">Categoria</th>
+                  <th data-key="precoAtual" class="num">Preço</th>
+                  <th data-key="estoque" class="num">Estoque</th>
+                  <th data-key="estoqueWms" class="num">Estoque WMS</th>
+                  <th data-key="qtdHoje" class="num">Saídas Hoje</th>
+                  <th data-key="qtdOntem" class="num">Saídas Ontem</th>
+                  <th data-key="qtd7" class="num">7 dias</th>
+                  <th data-key="qtd15" class="num">15 dias</th>
+                  <th data-key="qtd30" class="num">30 dias</th>
+                  <th data-key="evolucao30" class="num">Evol. 30d</th>
+                  <th data-key="mediaVendasDia" class="num">Média/dia</th>
+                  <th data-key="ultimaVendaOrdenacao" class="num">Última venda</th>
+                  <th data-key="diasRestantesOrdenacao" class="num">Dias de estoque</th>
+                  <th data-key="fat12m" class="num">Faturamento 12M</th>
+                  <th data-key="lucro12m" class="num">Lucro 12M</th>
+                  <th data-key="margem" class="num">Margem %</th>
+                  <th data-key="diasRupturaOrdenacao" class="num">Ruptura</th>
+                  <th data-key="situacaoOrdenacao">Situação</th>
+                  <th data-key="classificacao">Classificação</th>
+                  <th data-key="diretriz">DIRETRIZ</th>
                 </tr>
               </thead>
               <tbody id="productsBody"></tbody>
@@ -317,6 +317,9 @@
             <label class="checkbox-label">
               <input type="checkbox" id="semCustoFiltro"> Mostrar só sem custo preenchido
             </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="apenasComEstoqueFiltro" checked> Mostrar só com estoque disponível
+            </label>
           </div>
           <div class="table-wrap">
             <table id="estoqueTable">
@@ -349,6 +352,11 @@
           <h2 class="panel__title">Financeiro <span class="muted">— escolha o mês pra ver o total fechado e o dia a dia dele</span></h2>
           <div class="fin-header-controls">
             <select id="financeiroMesSelect" class="search-input" style="max-width:160px;flex:none;"></select>
+            <div class="dia-nav hidden" id="financeiroDiaControles">
+              <button type="button" class="preset-btn" id="diaAnteriorBtn">‹ Dia anterior</button>
+              <input type="date" id="financeiroDiaSelect" class="search-input" style="max-width:150px;flex:none;">
+              <button type="button" class="preset-btn" id="diaProximoBtn">Próximo dia ›</button>
+            </div>
             <div class="toggle-group" id="financeiroContaToggle">
               <button type="button" class="toggle-btn active" data-conta="ambas">Ambas as contas</button>
               <button type="button" class="toggle-btn" data-conta="1">Conta 1</button>
@@ -361,7 +369,7 @@
           </div>
         </div>
         <div class="fin-kpi-row" id="finKpiRow"></div>
-        <div class="fin-kpi-row fin-kpi-row--3col" id="finDevolucoesRow"></div>
+        <div class="fin-kpi-row" id="finDevolucoesRow"></div>
         <div class="fin-kpi-row" id="finContaBreakdown"></div>
         <div class="chart-box chart-box--lg"><canvas id="financeiroChart"></canvas></div>
       </section>
@@ -417,7 +425,7 @@
 
 <template id="rowDetailTemplate">
   <tr class="row-detail">
-    <td colspan="17">
+    <td colspan="25">
       <div class="chart-box chart-box--sm"><canvas class="sparkline"></canvas></div>
     </td>
   </tr>

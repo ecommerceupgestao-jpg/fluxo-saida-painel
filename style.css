@@ -10,6 +10,8 @@
 
   --foco: #5B9CFF;
   --foco-bg: rgba(91,156,255,0.14);
+  --baixo: #FF9F45;
+  --baixo-bg: rgba(255,159,69,0.14);
   --manutencao: #3DDC97;
   --manutencao-bg: rgba(61,220,151,0.14);
   --despriorizado: #F5C247;
@@ -131,7 +133,7 @@ dialog input {
 .dialog__actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 
 /* ---------- layout ---------- */
-main { padding: 24px 28px 60px; max-width: 1280px; margin: 0 auto; }
+main { padding: 24px 28px 60px; max-width: 1700px; margin: 0 auto; }
 
 .empty-state {
   text-align: center; padding: 100px 20px; color: var(--ink-muted);
@@ -212,6 +214,17 @@ td.sku-cell { font-family: var(--font-mono); font-weight: 600; }
 .badge--despriorizado { color: var(--despriorizado); background: var(--despriorizado-bg); }
 .badge--Análise, .badge--saida { color: var(--saida); background: var(--saida-bg); }
 .badge--ignorar, .badge--\- { color: var(--ignorar); background: var(--ignorar-bg); }
+.badge--baixo { color: var(--baixo); background: var(--baixo-bg); }
+
+/* Tabela "Lista completa de produtos" — bem mais colunas que as outras
+   tabelas do site, então usa uma versão mais compacta pra caber sem
+   precisar de rolagem horizontal. */
+#productsTable { font-size: 11px; }
+#productsTable thead th { padding: 6px 5px; font-size: 9px; white-space: normal; line-height: 1.25; }
+#productsTable tbody td { padding: 5px 5px; }
+#productsTable .produto-foto { width: 30px; height: 30px; }
+#productsTable .conta-badge { width: 15px; height: 15px; font-size: 9px; }
+#productsTable .badge { padding: 2px 7px; font-size: 9.5px; }
 
 .row-detail td { padding: 6px 10px 16px; background: rgba(255,255,255,0.02); }
 .sparkline { width: 100%; max-width: 460px; }
@@ -219,6 +232,7 @@ td.sku-cell { font-family: var(--font-mono); font-weight: 600; }
 /* ---------- financeiro ---------- */
 .financeiro .panel__header { margin-bottom: 16px; }
 .fin-header-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.dia-nav { display: flex; gap: 8px; align-items: center; }
 .toggle-group { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .toggle-btn {
   border: none; background: var(--panel); padding: 6px 14px; font-size: 12px; font-weight: 600;
@@ -255,6 +269,9 @@ td.sku-cell { font-family: var(--font-mono); font-weight: 600; }
 .fin-kpi__value { font-family: var(--font-mono); font-size: 21px; font-weight: 600; }
 .fin-kpi__label { font-size: 11.5px; font-weight: 600; color: var(--ink-muted); }
 .fin-kpi--in .fin-kpi__value { color: var(--manutencao); }
+.fin-kpi__delta { display: block; font-size: 11px; font-weight: 600; margin-top: 4px; }
+.fin-kpi__delta--up { color: var(--manutencao); }
+.fin-kpi__delta--down { color: var(--saida); }
 .fin-kpi--out .fin-kpi__value { color: var(--saida); }
 .fin-kpi--profit .fin-kpi__value { color: var(--foco); }
 
