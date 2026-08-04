@@ -123,7 +123,8 @@
       state.transacoes_2 = data.transacoes_2 || [];
       state.devolucoes = data.devolucoes || [];
       state.devolucoes_2 = data.devolucoes_2 || [];
-      state.movimentos_mp = data.movimentos_mp || [];
+      state.movimentos_mp = (data.movimentos_mp || []).map((m) => ({ ...m, contaMp: "1" }));
+      state.movimentos_mp_2 = (data.movimentos_mp_2 || []).map((m) => ({ ...m, contaMp: "2" }));
       state.produtos_conta1_raw = data.produtos_conta1_raw || [];
       state.produtos_conta2_raw = data.produtos_conta2_raw || [];
 
@@ -1336,9 +1337,13 @@
       </optgroup>`).join("");
   }
 
+  function movimentosMpCombinados_() {
+    return (state.movimentos_mp || []).concat(state.movimentos_mp_2 || []);
+  }
+
   function mesesDisponiveisCaixa_() {
     const set = new Set();
-    (state.movimentos_mp || []).forEach((m) => { const mm = (m.data || "").slice(0, 7); if (mm) set.add(mm); });
+    movimentosMpCombinados_().forEach((m) => { const mm = (m.data || "").slice(0, 7); if (mm) set.add(mm); });
     const hoje = new Date();
     set.add(`${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`);
     return Array.from(set).sort().reverse();
@@ -1375,7 +1380,7 @@
     const yyyyMM = state.caixaMes;
     if (!yyyyMM) return;
 
-    let linhas = (state.movimentos_mp || []).filter((m) => (m.data || "").slice(0, 7) === yyyyMM);
+    let linhas = movimentosMpCombinados_().filter((m) => (m.data || "").slice(0, 7) === yyyyMM);
     if (state.caixaOrigem !== "todas") linhas = linhas.filter((m) => m.origem === state.caixaOrigem);
     linhas = linhas.slice().sort((a, b) => (a.data < b.data ? 1 : -1));
 
@@ -1407,10 +1412,11 @@
       <tr>
         <td>${(m.data || "").split("-").reverse().join("/")}</td>
         <td class="titulo-cell" style="max-width:280px;">${escapeHtml(m.descricao || "-")}</td>
+        <td><span class="conta-badge conta-badge--${m.contaMp}">${m.contaMp}</span></td>
         <td><span class="conta-badge conta-badge--${m.origem === "Mercado Livre" ? "1" : "2"}" style="width:auto;border-radius:10px;padding:2px 8px;">${escapeHtml(m.origem || "-")}</span></td>
         <td class="sku-cell">${escapeHtml(m.pedido_ml || "-")}</td>
         <td>
-          <select class="search-input categoria-mp-select" data-pagamento-id="${escapeHtml(m.pagamento_id)}" style="min-width:170px;">
+          <select class="search-input categoria-mp-select" data-pagamento-id="${escapeHtml(m.pagamento_id)}" data-conta-mp="${m.contaMp}" style="min-width:170px;">
             ${opcoesPlanoContasHtml_(m.categoria)}
           </select>
         </td>
@@ -1433,11 +1439,11 @@
       const resp = await fetch(cfg.apiUrl, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ token: cfg.apiToken, acao: "categorizar_movimento_mp", pagamento_id: pagamentoId, categoria, salvar_regra: true }),
+        body: JSON.stringify({ token: cfg.apiToken, acao: "categorizar_movimento_mp", pagamento_id: pagamentoId, categoria, salvar_regra: true, conta_mp: select.dataset.contaMp }),
       });
       const data = await resp.json();
       if (!data.ok) throw new Error(data.error || "erro");
-      const mov = (state.movimentos_mp || []).find((m) => m.pagamento_id === pagamentoId);
+      const mov = movimentosMpCombinados_().find((m) => m.pagamento_id === pagamentoId);
       if (mov) mov.categoria = categoria;
     } catch (err) {
       alert("Não foi possível salvar a categoria: " + err.message);
