@@ -251,6 +251,20 @@ td.titulo-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; wh
 .origem-item__barra-fundo { background: var(--panel-2); border-radius: 6px; height: 16px; overflow: hidden; }
 .origem-item__barra { height: 100%; border-radius: 6px; background: var(--foco); }
 .origem-item__valor { text-align: right; color: var(--ink-muted); font-family: var(--font-mono); white-space: nowrap; }
+
+/* ---------- formulário de Contas a Pagar / a Receber --------------------- */
+.conta-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.conta-form input, .conta-form select {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--ink); padding: 8px 10px; font-size: 12.5px; font-family: inherit;
+}
+.conta-form input[type="text"], .conta-form input[type="number"] { flex: 1 1 160px; min-width: 120px; }
+.conta-form input[type="date"] { flex: 0 1 150px; }
+.conta-form select { flex: 1 1 180px; }
+.status-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px; }
+.status-badge--pendente, .status-badge--a-receber { color: var(--despriorizado); background: var(--despriorizado-bg); }
+.status-badge--pago, .status-badge--recebido { color: var(--manutencao); background: var(--manutencao-bg); }
+.status-badge--vencida { color: var(--saida); background: var(--saida-bg); }
 .fin-kpi-row--3col { grid-template-columns: repeat(3, 1fr); }
 @media (max-width: 860px) { .fin-kpi-row--3col { grid-template-columns: 1fr; } }
 

@@ -71,6 +71,8 @@
       <button type="button" class="tab-btn" data-tab="estoque">Estoque</button>
       <button type="button" class="tab-btn" data-tab="financeiro">Financeiro</button>
       <button type="button" class="tab-btn" data-tab="caixa">Caixa</button>
+      <button type="button" class="tab-btn" data-tab="apagar">A Pagar</button>
+      <button type="button" class="tab-btn" data-tab="areceber">A Receber</button>
     </nav>
 
     <!-- ==================================================== TAB: HOJE -->
@@ -443,6 +445,11 @@
         <div class="origem-breakdown" id="caixaOrigemBreakdown"></div>
       </section>
 
+      <h2 class="section-title">Mercado Livre <span class="muted">— quanto já está disponível vs. ainda a liberar</span></h2>
+      <section class="panel">
+        <div class="fin-kpi-row" id="caixaMlRow"></div>
+      </section>
+
       <h2 class="section-title">Lançamentos <span id="caixaCount" class="muted"></span></h2>
       <section class="panel">
         <div class="table-wrap">
@@ -460,6 +467,99 @@
               </tr>
             </thead>
             <tbody id="caixaBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </section>
+
+    <!-- ================================================== TAB: A PAGAR -->
+    <section class="tab-panel" data-tab="apagar">
+
+      <h2 class="section-title">Contas a Pagar</h2>
+      <div class="fin-kpi-row" id="apagarKpiRow"></div>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h2 class="panel__title">Nova conta a pagar</h2>
+        </div>
+        <form id="apagarForm" class="conta-form">
+          <input type="text" id="apagarDescricao" placeholder="Descrição *" required>
+          <input type="text" id="apagarFornecedor" placeholder="Fornecedor">
+          <select id="apagarCategoria"></select>
+          <input type="text" id="apagarContaPagamento" placeholder="Conta de pagamento (ex: Nubank)">
+          <input type="number" id="apagarValorTotal" placeholder="Valor total (R$) *" step="0.01" min="0.01" required>
+          <input type="number" id="apagarParcelas" placeholder="Parcelas" value="1" min="1" step="1">
+          <input type="date" id="apagarVencimento" required>
+          <button type="submit" class="btn btn--primary">+ Adicionar</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h2 class="panel__title">Lançamentos <span id="apagarCount" class="muted"></span></h2>
+        </div>
+        <div class="table-wrap">
+          <table id="apagarTable">
+            <thead>
+              <tr>
+                <th>Vencimento</th>
+                <th>Descrição</th>
+                <th>Fornecedor</th>
+                <th>Categoria</th>
+                <th>Parcela</th>
+                <th class="num">Valor</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="apagarBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </section>
+
+    <!-- ================================================ TAB: A RECEBER -->
+    <section class="tab-panel" data-tab="areceber">
+
+      <h2 class="section-title">Contas a Receber</h2>
+      <div class="fin-kpi-row" id="areceberKpiRow"></div>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h2 class="panel__title">Novo recebimento previsto</h2>
+        </div>
+        <form id="areceberForm" class="conta-form">
+          <input type="text" id="areceberDescricao" placeholder="Descrição *" required>
+          <input type="text" id="areceberCliente" placeholder="Cliente">
+          <select id="areceberCategoria"></select>
+          <input type="text" id="areceberForma" placeholder="Forma de recebimento (ex: Pix)">
+          <input type="text" id="areceberContaDestino" placeholder="Conta de destino">
+          <input type="number" id="areceberValor" placeholder="Valor (R$) *" step="0.01" min="0.01" required>
+          <input type="date" id="areceberVencimento" required>
+          <button type="submit" class="btn btn--primary">+ Adicionar</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h2 class="panel__title">Lançamentos <span id="areceberCount" class="muted"></span></h2>
+        </div>
+        <div class="table-wrap">
+          <table id="areceberTable">
+            <thead>
+              <tr>
+                <th>Vencimento</th>
+                <th>Descrição</th>
+                <th>Cliente</th>
+                <th>Categoria</th>
+                <th class="num">Valor</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="areceberBody"></tbody>
           </table>
         </div>
       </section>

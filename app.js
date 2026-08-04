@@ -125,6 +125,8 @@
       state.devolucoes_2 = data.devolucoes_2 || [];
       state.movimentos_mp = (data.movimentos_mp || []).map((m) => ({ ...m, contaMp: "1" }));
       state.movimentos_mp_2 = (data.movimentos_mp_2 || []).map((m) => ({ ...m, contaMp: "2" }));
+      state.contas_pagar = data.contas_pagar || [];
+      state.contas_receber = data.contas_receber || [];
       state.produtos_conta1_raw = data.produtos_conta1_raw || [];
       state.produtos_conta2_raw = data.produtos_conta2_raw || [];
 
@@ -187,6 +189,8 @@
     renderEstoque();
     renderFinanceiro();
     renderCaixa();
+    renderApagar();
+    renderAreceber();
     renderFilters();
     renderTable();
     renderCharts();
@@ -1418,6 +1422,31 @@
       }).join("");
   }
 
+  // "Disponível" = já liberado pelo Mercado Livre (você já pode usar esse
+  // dinheiro). "A liberar" = já é seu, mas o Mercado Livre ainda está
+  // retendo (normalmente libera uns dias depois da venda). Isso evita a
+  // confusão de olhar o total e achar que já tem tudo isso na mão.
+  function renderMercadoLivreDisponivel_(yyyyMM) {
+    const doMes = movimentosMpCombinados_().filter((m) => (m.data || "").slice(0, 7) === yyyyMM && m.origem === "Mercado Livre");
+    const disponivel = doMes.filter((m) => m.status_liberacao === "released").reduce((s, m) => s + Number(m.valor || 0), 0);
+    const aLiberar = doMes.filter((m) => m.status_liberacao === "pending").reduce((s, m) => s + Number(m.valor || 0), 0);
+    const total = disponivel + aLiberar;
+
+    document.getElementById("caixaMlRow").innerHTML = `
+      <div class="fin-kpi fin-kpi--in">
+        <span class="fin-kpi__value">${fmtMoney(disponivel)}</span>
+        <span class="fin-kpi__label">🟢 Disponível (já liberado)</span>
+      </div>
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtMoney(aLiberar)}</span>
+        <span class="fin-kpi__label">🟡 A liberar (ainda retido pelo ML)</span>
+      </div>
+      <div class="fin-kpi fin-kpi--profit">
+        <span class="fin-kpi__value">${fmtMoney(total)}</span>
+        <span class="fin-kpi__label">Total de vendas do Mercado Livre no mês</span>
+      </div>`;
+  }
+
   function renderCaixa() {
     popularCaixaMesSelect_();
     const yyyyMM = state.caixaMes;
@@ -1433,6 +1462,7 @@
     const naoCategorizados = linhas.filter((m) => !m.categoria).length;
 
     renderOrigemBreakdown_(linhas);
+    renderMercadoLivreDisponivel_(yyyyMM);
 
     document.getElementById("caixaKpiRow").innerHTML = `
       <div class="fin-kpi fin-kpi--in">
@@ -1494,6 +1524,216 @@
       alert("Não foi possível salvar a categoria: " + err.message);
     } finally {
       select.disabled = false;
+    }
+  }
+
+  // ------------------------------------------------------- Contas a Pagar
+  function categoriasFlatOptionsHtml_() {
+    return `<option value="">Categoria</option>` + PLANO_CONTAS.map((g) => `
+      <optgroup label="${escapeHtml(g.grupo)}">
+        ${g.categorias.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("")}
+      </optgroup>`).join("");
+  }
+  document.getElementById("apagarCategoria").innerHTML = categoriasFlatOptionsHtml_();
+  document.getElementById("areceberCategoria").innerHTML = categoriasFlatOptionsHtml_();
+
+  function fmtStatusBadge_(status) {
+    const classe = status.toLowerCase().replace(/\s+/g, "-");
+    return `<span class="status-badge status-badge--${classe}">${escapeHtml(status)}</span>`;
+  }
+
+  function diasAteVencimento_(iso) {
+    if (!iso) return null;
+    const hoje = isoDate_(new Date());
+    return Math.round((new Date(iso + "T12:00:00") - new Date(hoje + "T12:00:00")) / 86400000);
+  }
+
+  function renderApagar() {
+    const contas = (state.contas_pagar || []).slice().sort((a, b) => (a.vencimento < b.vencimento ? -1 : 1));
+    const pendentes = contas.filter((c) => c.status === "Pendente");
+    const totalPendente = pendentes.reduce((s, c) => s + Number(c.valor || 0), 0);
+    const vencendo7 = pendentes.filter((c) => { const d = diasAteVencimento_(c.vencimento); return d !== null && d >= 0 && d <= 7; })
+      .reduce((s, c) => s + Number(c.valor || 0), 0);
+    const vencidas = pendentes.filter((c) => { const d = diasAteVencimento_(c.vencimento); return d !== null && d < 0; });
+    const totalVencido = vencidas.reduce((s, c) => s + Number(c.valor || 0), 0);
+    const hojeIso = isoDate_(new Date());
+    const pagoNoMes = contas.filter((c) => c.status === "Pago" && (c.data_pagamento || "").slice(0, 7) === hojeIso.slice(0, 7))
+      .reduce((s, c) => s + Number(c.valor || 0), 0);
+
+    document.getElementById("apagarKpiRow").innerHTML = `
+      <div class="fin-kpi fin-kpi--out">
+        <span class="fin-kpi__value">${fmtMoney(totalPendente)}</span>
+        <span class="fin-kpi__label">Total pendente</span>
+      </div>
+      <div class="fin-kpi ${vencendo7 > 0 ? "fin-kpi--out" : ""}">
+        <span class="fin-kpi__value">${fmtMoney(vencendo7)}</span>
+        <span class="fin-kpi__label">Vencendo nos próximos 7 dias</span>
+      </div>
+      <div class="fin-kpi ${totalVencido > 0 ? "fin-kpi--out" : ""}">
+        <span class="fin-kpi__value">${fmtMoney(totalVencido)}</span>
+        <span class="fin-kpi__label">🔴 Vencidas (${vencidas.length})</span>
+      </div>
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtMoney(pagoNoMes)}</span>
+        <span class="fin-kpi__label">Pago este mês</span>
+      </div>`;
+
+    document.getElementById("apagarCount").textContent = `(${contas.length})`;
+    document.getElementById("apagarBody").innerHTML = contas.map((c) => {
+      const dias = diasAteVencimento_(c.vencimento);
+      const statusExibido = c.status === "Pendente" && dias !== null && dias < 0 ? "Vencida" : c.status;
+      return `
+      <tr>
+        <td>${(c.vencimento || "").split("-").reverse().join("/")}</td>
+        <td>${escapeHtml(c.descricao)}</td>
+        <td>${escapeHtml(c.fornecedor || "-")}</td>
+        <td>${escapeHtml(c.categoria || "-")}</td>
+        <td>${escapeHtml(c.parcela || "-")}</td>
+        <td class="num">${fmtMoney(c.valor)}</td>
+        <td>${fmtStatusBadge_(statusExibido)}</td>
+        <td>${c.status === "Pendente" ? `<button type="button" class="btn btn--ghost btn--icon acao-conta-pagar" data-id="${c.id}" data-acao="marcar_conta_pagar_paga" title="Marcar como pago">✓</button>` : ""}
+          <button type="button" class="btn btn--ghost btn--icon acao-conta-pagar" data-id="${c.id}" data-acao="excluir_conta_pagar" title="Excluir">✕</button></td>
+      </tr>`;
+    }).join("");
+
+    document.querySelectorAll(".acao-conta-pagar").forEach((btn) => {
+      btn.addEventListener("click", () => executarAcaoConta_(btn.dataset.acao, btn.dataset.id, "contas_pagar"));
+    });
+  }
+
+  document.getElementById("apagarForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const cfg = loadConfig();
+    const btn = e.target.querySelector("button[type=submit]");
+    btn.disabled = true;
+    try {
+      const resp = await fetch(cfg.apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          token: cfg.apiToken, acao: "adicionar_conta_pagar",
+          descricao: document.getElementById("apagarDescricao").value,
+          fornecedor: document.getElementById("apagarFornecedor").value,
+          categoria: document.getElementById("apagarCategoria").value,
+          conta_pagamento: document.getElementById("apagarContaPagamento").value,
+          valor_total: document.getElementById("apagarValorTotal").value,
+          parcelas: document.getElementById("apagarParcelas").value,
+          vencimento_primeira: document.getElementById("apagarVencimento").value,
+        }),
+      });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "erro");
+      e.target.reset();
+      document.getElementById("apagarParcelas").value = "1";
+      fetchData();
+    } catch (err) {
+      alert("Não foi possível adicionar: " + err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ----------------------------------------------------- Contas a Receber
+  function renderAreceber() {
+    const contas = (state.contas_receber || []).slice().sort((a, b) => (a.vencimento < b.vencimento ? -1 : 1));
+    const pendentes = contas.filter((c) => c.status === "A receber");
+    const totalPendente = pendentes.reduce((s, c) => s + Number(c.valor || 0), 0);
+    const previsto7 = pendentes.filter((c) => { const d = diasAteVencimento_(c.vencimento); return d !== null && d >= 0 && d <= 7; })
+      .reduce((s, c) => s + Number(c.valor || 0), 0);
+    const atrasados = pendentes.filter((c) => { const d = diasAteVencimento_(c.vencimento); return d !== null && d < 0; });
+    const totalAtrasado = atrasados.reduce((s, c) => s + Number(c.valor || 0), 0);
+    const hojeIso = isoDate_(new Date());
+    const recebidoNoMes = contas.filter((c) => c.status === "Recebido" && (c.data_recebimento || "").slice(0, 7) === hojeIso.slice(0, 7))
+      .reduce((s, c) => s + Number(c.valor || 0), 0);
+
+    document.getElementById("areceberKpiRow").innerHTML = `
+      <div class="fin-kpi fin-kpi--in">
+        <span class="fin-kpi__value">${fmtMoney(totalPendente)}</span>
+        <span class="fin-kpi__label">Total a receber</span>
+      </div>
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtMoney(previsto7)}</span>
+        <span class="fin-kpi__label">Previsto nos próximos 7 dias</span>
+      </div>
+      <div class="fin-kpi ${totalAtrasado > 0 ? "fin-kpi--out" : ""}">
+        <span class="fin-kpi__value">${fmtMoney(totalAtrasado)}</span>
+        <span class="fin-kpi__label">🔴 Atrasados (${atrasados.length})</span>
+      </div>
+      <div class="fin-kpi fin-kpi--profit">
+        <span class="fin-kpi__value">${fmtMoney(recebidoNoMes)}</span>
+        <span class="fin-kpi__label">Recebido este mês</span>
+      </div>`;
+
+    document.getElementById("areceberCount").textContent = `(${contas.length})`;
+    document.getElementById("areceberBody").innerHTML = contas.map((c) => {
+      const dias = diasAteVencimento_(c.vencimento);
+      const statusExibido = c.status === "A receber" && dias !== null && dias < 0 ? "Atrasado" : c.status;
+      return `
+      <tr>
+        <td>${(c.vencimento || "").split("-").reverse().join("/")}</td>
+        <td>${escapeHtml(c.descricao)}</td>
+        <td>${escapeHtml(c.cliente || "-")}</td>
+        <td>${escapeHtml(c.categoria || "-")}</td>
+        <td class="num">${fmtMoney(c.valor)}</td>
+        <td>${fmtStatusBadge_(statusExibido)}</td>
+        <td>${c.status === "A receber" ? `<button type="button" class="btn btn--ghost btn--icon acao-conta-receber" data-id="${c.id}" data-acao="marcar_conta_receber_recebida" title="Marcar como recebido">✓</button>` : ""}
+          <button type="button" class="btn btn--ghost btn--icon acao-conta-receber" data-id="${c.id}" data-acao="excluir_conta_receber" title="Excluir">✕</button></td>
+      </tr>`;
+    }).join("");
+
+    document.querySelectorAll(".acao-conta-receber").forEach((btn) => {
+      btn.addEventListener("click", () => executarAcaoConta_(btn.dataset.acao, btn.dataset.id, "contas_receber"));
+    });
+  }
+
+  document.getElementById("areceberForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const cfg = loadConfig();
+    const btn = e.target.querySelector("button[type=submit]");
+    btn.disabled = true;
+    try {
+      const resp = await fetch(cfg.apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          token: cfg.apiToken, acao: "adicionar_conta_receber",
+          descricao: document.getElementById("areceberDescricao").value,
+          cliente: document.getElementById("areceberCliente").value,
+          categoria: document.getElementById("areceberCategoria").value,
+          forma_recebimento: document.getElementById("areceberForma").value,
+          conta_destino: document.getElementById("areceberContaDestino").value,
+          valor: document.getElementById("areceberValor").value,
+          vencimento: document.getElementById("areceberVencimento").value,
+        }),
+      });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "erro");
+      e.target.reset();
+      fetchData();
+    } catch (err) {
+      alert("Não foi possível adicionar: " + err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Ação genérica (marcar como pago/recebido, ou excluir) pras duas telas —
+  // sempre busca os dados de novo no final, pra tudo (KPIs, tabela) ficar
+  // consistente sem precisar duplicar a lógica de atualização local.
+  async function executarAcaoConta_(acao, id, campoEstado) {
+    if (acao.startsWith("excluir") && !confirm("Tem certeza que quer excluir esse lançamento?")) return;
+    const cfg = loadConfig();
+    try {
+      const resp = await fetch(cfg.apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ token: cfg.apiToken, acao, id }),
+      });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "erro");
+      fetchData();
+    } catch (err) {
+      alert("Não foi possível concluir: " + err.message);
     }
   }
 
