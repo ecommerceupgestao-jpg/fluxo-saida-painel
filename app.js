@@ -376,45 +376,38 @@
     const somenteSemCusto = document.getElementById("semCustoFiltro").checked;
     const apenasComEstoque = document.getElementById("apenasComEstoqueFiltro").checked;
     let totalParado = 0, totalPotencial = 0, totalLucroPotencial = 0;
-    // Os 3 indicadores do topo (capital parado, valor potencial, lucro
-    // potencial) SEMPRE consideram só quem tem estoque de verdade (> 0) —
-    // produto zerado não representa capital parado nem venda potencial
-    // nenhuma. Isso é sempre assim, independente do checkbox abaixo, que só
-    // controla o que aparece NA LISTA (às vezes você quer ver o que já
-    // zerou, pra saber o que repor).
-    let linhas = state.produtos.map((p) => {
-      const estoque = Number(p["Estoque AnyMarket disponível"] || 0);
-      const custo = Number(p["Custo Unitário"] || 0);
-      const preco = Number(p["Preço Atual"] || 0);
-      const precoOriginal = Number(p["Preço Original"] || 0);
-      // Antes usava a margem histórica de 12 meses (Lucro 12M / Faturamento
-      // 12M) pra estimar o lucro potencial do estoque parado. Isso dava
-      // valores sem sentido em produtos com pouco histórico de venda: um
-      // SKU com 1-2 vendas e um frete caro naquele pedido específico podia
-      // ter margem histórica de -300% ou +250%, e multiplicado pelo valor
-      // de todo o estoque parado, o "lucro potencial" saía completamente
-      // fora da realidade. Agora usa a margem simples e sempre coerente
-      // entre o preço de venda ATUAL e o custo ATUAL do produto — não
-      // depende de quantas vendas ele já teve, e já reflete automaticamente
-      // qualquer promoção ativa no Mercado Livre, porque "Preço Atual" vem
-      // do endpoint que reporta o preço realmente cobrado agora (com
-      // desconto ativo, se houver) — não o preço de tabela.
+    // Usa as linhas POR CONTA (mesmas da "Lista completa de produtos") —
+    // se o mesmo SKU existir nas duas contas, cada uma aparece com seu
+    // próprio estoque/preço/custo, sem somar uma na outra. Antes, usar o
+    // SKU combinado fazia o preço/estoque de uma conta "vazar" pra métrica
+    // da outra.
+    let linhas = (state.linhasProdutosPorConta || []).map((p) => {
+      const estoque = p.estoque;
+      const custo = p.custo;
+      const preco = p.precoAtual;
+      const precoOriginal = p.precoOriginal;
+      // Margem sempre coerente entre o preço de venda ATUAL e o custo ATUAL
+      // do produto (não a margem histórica de vendas, que pode ficar
+      // distorcida em produto com pouco histórico) — e por já vir do preço
+      // que o Mercado Livre está cobrando de fato agora, já reflete
+      // automaticamente qualquer promoção ativa.
+      //   Lucro potencial = Valor de venda potencial × Margem atual
       const margem = preco > 0 ? (preco - custo) / preco : 0;
       const valorParado = estoque * custo;
       const valorPotencial = estoque * preco;
       const lucroPotencial = valorPotencial * margem;
-      // Os 3 indicadores do topo (capital parado, valor potencial, lucro
-      // potencial) SEMPRE consideram só quem tem estoque de verdade (> 0) —
-      // produto zerado não representa capital parado nem venda potencial
-      // nenhuma. Isso é sempre assim, independente do checkbox "só com
-      // estoque" abaixo, que só controla o que aparece NA LISTA (às vezes
-      // você quer ver o que já zerou, pra saber o que repor).
+      // Os 3 indicadores do topo SEMPRE consideram só quem tem estoque de
+      // verdade (> 0) — isso é sempre assim, independente do checkbox "só
+      // com estoque" abaixo, que só controla o que aparece NA LISTA.
       if (estoque > 0) {
         totalParado += valorParado;
         totalPotencial += valorPotencial;
         totalLucroPotencial += lucroPotencial;
       }
-      return { sku: p["SKUs"], foto: p["Foto URL"], link: p["Link Anúncio"], estoque, custo, valorParado, preco, precoOriginal, margem, lucroPotencial };
+      return {
+        sku: p.sku, conta: p.conta, titulo: p.titulo, foto: p.foto, link: p.link,
+        estoque, custo, valorParado, preco, precoOriginal, margem, lucroPotencial,
+      };
     }).sort((a, b) => b.valorParado - a.valorParado);
 
     document.getElementById("estoqueKpiRow").innerHTML = `
@@ -438,6 +431,8 @@
       <tr>
         <td>${fmtFoto(l.foto)}</td>
         <td>${fmtSkuLink(l.sku, l.link)}</td>
+        <td><span class="conta-badge conta-badge--${l.conta}">${l.conta}</span></td>
+        <td class="titulo-cell">${escapeHtml(l.titulo || "-")}</td>
         <td class="num">${fmtNum(l.estoque)}</td>
         <td class="num">
           <input type="number" step="0.01" min="0" class="custo-edit" data-sku="${escapeHtml(l.sku)}" value="${l.custo || ""}" placeholder="0,00">
@@ -460,7 +455,11 @@
   async function salvarCusto_(input) {
     const sku = input.dataset.sku;
     const custo = Number(input.value || 0);
-    const msg = document.querySelector(`[data-sku-msg="${sku}"]`);
+    // Usa o span de mensagem que está DENTRO DA MESMA CÉLULA desse input
+    // específico — não um seletor global por SKU, porque agora o mesmo SKU
+    // pode aparecer em 2 linhas (uma por conta), e um seletor global sempre
+    // acharia a primeira, mostrando "✓ salvo" na linha errada.
+    const msg = input.closest("td").querySelector(".custo-save-msg");
     const cfg = loadConfig();
     input.classList.add("salvando");
     msg.textContent = "";
@@ -475,9 +474,13 @@
       if (!data.ok) throw new Error(data.error || "erro");
       msg.textContent = "✓ salvo";
       msg.className = "custo-save-msg ok";
-      // Atualiza o valor localmente pra Capital Parado/Margem já refletirem sem esperar o próximo fetch automático.
+      // Atualiza o valor localmente (nas duas fontes de dados) pra Capital
+      // Parado/Margem já refletirem sem esperar o próximo fetch automático.
+      // O custo é o MESMO pra esse SKU nas duas contas (aba Custos é
+      // compartilhada), então atualiza toda linha que tiver esse SKU.
       const produto = state.produtos.find((p) => p["SKUs"] === sku);
       if (produto) produto["Custo Unitário"] = custo;
+      (state.linhasProdutosPorConta || []).forEach((l) => { if (l.sku === sku) l.custo = custo; });
       renderEstoque();
     } catch (err) {
       msg.textContent = "✗ erro ao salvar";
@@ -639,6 +642,7 @@
 
       return {
         sku, conta, fornecedor: raw.fornecedor, categoria: raw.categoria, foto: raw.foto, link: raw.link,
+        titulo: raw.titulo || "",
         estoque, estoqueWms: Number(raw.estoque_wms || 0),
         precoOriginal: Number(raw.preco_original || 0), precoAtual: Number(raw.preco_atual || 0),
         custo,
