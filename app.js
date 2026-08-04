@@ -1406,7 +1406,7 @@
     const grupos = {};
     linhas.forEach((m) => {
       const chave = m.origem === "Mercado Livre" ? "Mercado Livre" : fmtMetodoPagamento_(m.metodo_pagamento);
-      grupos[chave] = (grupos[chave] || 0) + Number(m.valor || 0);
+      grupos[chave] = (grupos[chave] || 0) + Number(m.valor_liquido || m.valor || 0);
     });
     const total = Object.values(grupos).reduce((s, v) => s + v, 0);
     const ordenado = Object.entries(grupos).sort((a, b) => b[1] - a[1]);
@@ -1431,8 +1431,8 @@
   // confusão de olhar o total e achar que já tem tudo isso na mão.
   function renderMercadoLivreDisponivel_(yyyyMM) {
     const doMes = movimentosMpCombinados_().filter((m) => (m.data || "").slice(0, 7) === yyyyMM && m.origem === "Mercado Livre");
-    const disponivel = doMes.filter((m) => m.status_liberacao === "released").reduce((s, m) => s + Number(m.valor || 0), 0);
-    const aLiberar = doMes.filter((m) => m.status_liberacao === "pending").reduce((s, m) => s + Number(m.valor || 0), 0);
+    const disponivel = doMes.filter((m) => m.status_liberacao === "released").reduce((s, m) => s + Number(m.valor_liquido || m.valor || 0), 0);
+    const aLiberar = doMes.filter((m) => m.status_liberacao === "pending").reduce((s, m) => s + Number(m.valor_liquido || m.valor || 0), 0);
     const total = disponivel + aLiberar;
 
     document.getElementById("caixaMlRow").innerHTML = `
@@ -1470,8 +1470,8 @@
     if (state.caixaOrigem !== "todas") linhas = linhas.filter((m) => m.origem === state.caixaOrigem);
     linhas = linhas.slice().sort((a, b) => (a.data < b.data ? 1 : -1));
 
-    const totalEntradas = linhas.reduce((s, m) => s + Number(m.valor || 0), 0);
-    const totalMarketplace = linhas.filter((m) => m.origem === "Mercado Livre").reduce((s, m) => s + Number(m.valor || 0), 0);
+    const totalEntradas = linhas.reduce((s, m) => s + Number(m.valor_liquido || m.valor || 0), 0);
+    const totalMarketplace = linhas.filter((m) => m.origem === "Mercado Livre").reduce((s, m) => s + Number(m.valor_liquido || m.valor || 0), 0);
     const totalOutras = totalEntradas - totalMarketplace;
     const naoCategorizados = linhas.filter((m) => !m.categoria).length;
 
@@ -1509,7 +1509,7 @@
             ${opcoesPlanoContasHtml_(m.categoria)}
           </select>
         </td>
-        <td class="num">${fmtMoney(m.valor)}${Number(m.valor_reembolsado) > 0 ? `<br><span class="price-promo">-${fmtMoney(m.valor_reembolsado)} reemb.</span>` : ""}</td>
+        <td class="num">${fmtPrecoComPromo(m.valor, m.valor_liquido || m.valor)}${Number(m.valor_reembolsado) > 0 ? `<br><span class="price-promo">-${fmtMoney(m.valor_reembolsado)} reemb.</span>` : ""}</td>
         <td>${m.status_liberacao === "released" ? "✅ Liberado" : m.status_liberacao === "pending" ? "⏳ Pendente" : escapeHtml(m.status_liberacao || "-")}</td>
       </tr>`).join("");
 
@@ -1660,7 +1660,7 @@
         descricao: m.descricao || "Venda Mercado Livre",
         cliente: "Mercado Livre (conta " + m.contaMp + ")",
         categoria: "Receita Marketplace",
-        valor: m.valor,
+        valor: m.valor_liquido || m.valor,
         vencimento: m.data_liberacao || m.data || "",
         status: "A receber",
         automatico: true,
