@@ -397,9 +397,13 @@
       const valorPotencial = estoque * preco;
       const lucroPotencial = valorPotencial * margem;
       // Os 3 indicadores do topo SEMPRE consideram só quem tem estoque de
-      // verdade (> 0) — isso é sempre assim, independente do checkbox "só
-      // com estoque" abaixo, que só controla o que aparece NA LISTA.
-      if (estoque > 0) {
+      // verdade (> 0) E custo preenchido (> 0) — produto sem custo
+      // cadastrado normalmente é um anúncio ainda não revisado/cadastrado
+      // corretamente, e o "estoque" que o Mercado Livre reporta pra ele às
+      // vezes não é confiável (ex: anúncio antigo, teste, ou duplicado).
+      // Isso é sempre assim, independente do checkbox "só com estoque"
+      // abaixo, que só controla o que aparece NA LISTA.
+      if (estoque > 0 && custo > 0) {
         totalParado += valorParado;
         totalPotencial += valorPotencial;
         totalLucroPotencial += lucroPotencial;
@@ -413,18 +417,24 @@
     document.getElementById("estoqueKpiRow").innerHTML = `
       <div class="fin-kpi">
         <span class="fin-kpi__value">${fmtMoney(totalParado)}</span>
-        <span class="fin-kpi__label">Capital parado em estoque (custo)</span>
+        <span class="fin-kpi__label">Capital parado em estoque (custo) <span class="muted">— só com custo preenchido</span></span>
       </div>
       <div class="fin-kpi">
         <span class="fin-kpi__value">${fmtMoney(totalPotencial)}</span>
-        <span class="fin-kpi__label">Valor de venda potencial</span>
+        <span class="fin-kpi__label">Valor de venda potencial <span class="muted">— só com custo preenchido</span></span>
       </div>
       <div class="fin-kpi fin-kpi--profit">
         <span class="fin-kpi__value">${fmtMoney(totalLucroPotencial)}</span>
-        <span class="fin-kpi__label">Lucro potencial (na margem atual)</span>
+        <span class="fin-kpi__label">Lucro potencial (na margem atual) <span class="muted">— só com custo preenchido</span></span>
       </div>`;
 
+    // Por padrão, a lista já exclui quem não tem custo preenchido (mesma
+    // regra dos 3 cards do topo) — geralmente é anúncio ainda não revisado,
+    // e o "estoque" que aparece pra ele não é confiável. O checkbox abaixo
+    // inverte isso: quando marcado, mostra SÓ esses itens sem custo, pra
+    // você conseguir revisar e preencher.
     if (somenteSemCusto) linhas = linhas.filter((l) => !l.custo);
+    else linhas = linhas.filter((l) => l.custo > 0);
     if (apenasComEstoque) linhas = linhas.filter((l) => l.estoque > 0);
 
     document.getElementById("estoqueBody").innerHTML = linhas.map((l) => `
