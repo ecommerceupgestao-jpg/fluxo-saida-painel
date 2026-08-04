@@ -118,6 +118,8 @@
       state.financeiro_mensal = data.financeiro_mensal || [];      state.curva_abc = data.curva_abc || [];
       state.transacoes = data.transacoes || [];
       state.transacoes_2 = data.transacoes_2 || [];
+      state.devolucoes = data.devolucoes || [];
+      state.devolucoes_2 = data.devolucoes_2 || [];
 
       // Junta o Faturamento/Lucro em R$ (da Curva ABC) em cada produto,
       // pra mostrar valor real ao lado da nota A/B/C.
@@ -771,6 +773,20 @@
     return transacoesPorConta_(conta || state.contaFinanceiro).filter((t) => (t.data || "").slice(0, 7) === yyyyMM);
   }
 
+  function devolucoesPorConta_(conta) {
+    if (conta === "1") return state.devolucoes;
+    if (conta === "2") return state.devolucoes_2;
+    return state.devolucoes.concat(state.devolucoes_2);
+  }
+
+  // Só conta como "Devolução" o produto que chegou a ser entregue e foi
+  // revertido depois — "Cancelamento" (nunca entregue) não entra na taxa
+  // de devolução, mas fica registrado do mesmo jeito em RAW_Cancelados.
+  function devolucoesDoMes_(yyyyMM, conta) {
+    return devolucoesPorConta_(conta || state.contaFinanceiro)
+      .filter((d) => (d.data || "").slice(0, 7) === yyyyMM && d.tipo === "Devolução");
+  }
+
   function totaisFinanceiroMes_(yyyyMM, conta) {
     const contaEfetiva = conta || state.contaFinanceiro;
     const txs = transacoesDoMes_(yyyyMM, contaEfetiva);
@@ -780,6 +796,17 @@
       taxa: acc.taxa + Number(t.taxa_ml || 0),
       frete: acc.frete + Number(t.frete || 0),
     }), { faturamento: 0, custo: 0, taxa: 0, frete: 0 });
+
+    const pedidosPagos = new Set(txs.map((t) => t.pedido_id).filter(Boolean));
+    const devolucoes = devolucoesDoMes_(yyyyMM, contaEfetiva);
+    const pedidosDevolvidos = new Set(devolucoes.map((d) => d.pedido_id).filter(Boolean));
+    const valorDevolvido = devolucoes.reduce((s, d) => s + Number(d.valor_reembolsado || 0), 0);
+    // O pedido devolvido já saiu de RAW_Vendas (por isso não está em "txs"),
+    // então pro total de pedidos pagos do mês precisamos somar os dois: os
+    // que ainda estão contando como venda + os que foram pagos e depois
+    // devolvidos. Sem isso, a taxa de devolução ficaria artificialmente alta.
+    const totalPedidosNoMes = pedidosPagos.size + pedidosDevolvidos.size;
+    const taxaDevolucao = totalPedidosNoMes ? pedidosDevolvidos.size / totalPedidosNoMes : 0;
 
     // "Gasto Ads" é digitado manualmente na planilha, pra CONTA 1 e sem
     // divisão por conta — só entra na conta quando a visão é "Ambas"
@@ -791,7 +818,10 @@
     const semDadoAds = contaEfetiva === "ambas" ? !mesInfo : true;
 
     const lucro = base.faturamento - base.custo - base.taxa - base.frete - ads;
-    return { ...base, ads, lucro, semDadoAds };
+    return {
+      ...base, ads, lucro, semDadoAds,
+      numDevolucoes: pedidosDevolvidos.size, valorDevolvido, taxaDevolucao,
+    };
   }
 
   // Série dia a dia de UM mês específico, sempre com todos os dias do mês
@@ -897,6 +927,20 @@
       <div class="fin-kpi">
         <span class="fin-kpi__value">${fmtPct(margem)}</span>
         <span class="fin-kpi__label">Margem líquida${totais.semDadoAds ? " (ads não contabilizado nessa visão)" : ""}</span>
+      </div>`;
+
+    document.getElementById("finDevolucoesRow").innerHTML = `
+      <div class="fin-kpi fin-kpi--out">
+        <span class="fin-kpi__value">${fmtNum(totais.numDevolucoes)}</span>
+        <span class="fin-kpi__label">Devoluções no mês (produto entregue e revertido)</span>
+      </div>
+      <div class="fin-kpi fin-kpi--out">
+        <span class="fin-kpi__value">${fmtMoney(totais.valorDevolvido)}</span>
+        <span class="fin-kpi__label">Valor reembolsado em devoluções</span>
+      </div>
+      <div class="fin-kpi ${totais.taxaDevolucao > 0.05 ? "fin-kpi--out" : ""}">
+        <span class="fin-kpi__value">${fmtPct(totais.taxaDevolucao)}</span>
+        <span class="fin-kpi__label">Margem de devolução</span>
       </div>`;
 
     // Quando a visão é "Ambas", mostra embaixo quanto foi faturado em CADA
