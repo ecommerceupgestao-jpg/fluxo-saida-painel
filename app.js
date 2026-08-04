@@ -1347,7 +1347,10 @@
 
   function mesesDisponiveisCaixa_() {
     const set = new Set();
-    movimentosMpCombinados_().forEach((m) => { const mm = (m.data || "").slice(0, 7); if (mm) set.add(mm); });
+    movimentosMpCombinados_().forEach((m) => {
+      const mm = (m.data_liberacao || m.data || "").slice(0, 7);
+      if (mm) set.add(mm);
+    });
     const hoje = new Date();
     set.add(`${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`);
     return Array.from(set).sort().reverse();
@@ -1452,7 +1455,18 @@
     const yyyyMM = state.caixaMes;
     if (!yyyyMM) return;
 
-    let linhas = movimentosMpCombinados_().filter((m) => (m.data || "").slice(0, 7) === yyyyMM);
+    // Caixa mostra só o que JÁ ESTÁ LIBERADO (o dinheiro que já é seu de
+    // verdade, disponível hoje) — o que ainda está "pendente" de liberação
+    // pelo Mercado Livre aparece em "A Receber", não aqui. Quando o
+    // Mercado Livre libera, o status muda sozinho e o lançamento passa a
+    // contar aqui automaticamente, sem precisar mover nada na mão.
+    // O mês considerado é o da LIBERAÇÃO (quando o dinheiro realmente
+    // entrou no caixa), não o da venda — pra bater com "o que já entrou".
+    let linhas = movimentosMpCombinados_().filter((m) => {
+      if (m.status_liberacao === "pending") return false;
+      const mesEfetivo = (m.data_liberacao || m.data || "").slice(0, 7);
+      return mesEfetivo === yyyyMM;
+    });
     if (state.caixaOrigem !== "todas") linhas = linhas.filter((m) => m.origem === state.caixaOrigem);
     linhas = linhas.slice().sort((a, b) => (a.data < b.data ? 1 : -1));
 
@@ -1485,7 +1499,7 @@
     document.getElementById("caixaCount").textContent = `(${linhas.length})`;
     document.getElementById("caixaBody").innerHTML = linhas.map((m) => `
       <tr>
-        <td>${(m.data || "").split("-").reverse().join("/")}</td>
+        <td>${((m.data_liberacao || m.data) || "").split("-").reverse().join("/")}</td>
         <td class="titulo-cell" style="max-width:280px;">${escapeHtml(m.descricao || "-")}</td>
         <td><span class="conta-badge conta-badge--${m.contaMp}">${m.contaMp}</span></td>
         <td><span class="conta-badge conta-badge--${m.origem === "Mercado Livre" ? "1" : "2"}" style="width:auto;border-radius:10px;padding:2px 8px;">${escapeHtml(m.origem || "-")}</span></td>
@@ -1634,8 +1648,29 @@
   });
 
   // ----------------------------------------------------- Contas a Receber
+  // Vendas do Mercado Livre que já aconteceram, mas o dinheiro ainda não
+  // foi liberado — aparecem aqui automaticamente (não precisa cadastrar
+  // nada), e desaparecem sozinhas quando o Mercado Livre libera (o status
+  // muda, e nessa hora elas passam a contar no Caixa, não mais aqui).
+  function recebiveisAutomaticosML_() {
+    return movimentosMpCombinados_()
+      .filter((m) => m.origem === "Mercado Livre" && m.status_liberacao === "pending")
+      .map((m) => ({
+        id: "ml_" + m.pagamento_id,
+        descricao: m.descricao || "Venda Mercado Livre",
+        cliente: "Mercado Livre (conta " + m.contaMp + ")",
+        categoria: "Receita Marketplace",
+        valor: m.valor,
+        vencimento: m.data_liberacao || m.data || "",
+        status: "A receber",
+        automatico: true,
+      }));
+  }
+
   function renderAreceber() {
-    const contas = (state.contas_receber || []).slice().sort((a, b) => (a.vencimento < b.vencimento ? -1 : 1));
+    const contas = (state.contas_receber || []).map((c) => ({ ...c, automatico: false }))
+      .concat(recebiveisAutomaticosML_())
+      .sort((a, b) => (a.vencimento < b.vencimento ? -1 : 1));
     const pendentes = contas.filter((c) => c.status === "A receber");
     const totalPendente = pendentes.reduce((s, c) => s + Number(c.valor || 0), 0);
     const previsto7 = pendentes.filter((c) => { const d = diasAteVencimento_(c.vencimento); return d !== null && d >= 0 && d <= 7; })
@@ -1672,12 +1707,13 @@
       <tr>
         <td>${(c.vencimento || "").split("-").reverse().join("/")}</td>
         <td>${escapeHtml(c.descricao)}</td>
-        <td>${escapeHtml(c.cliente || "-")}</td>
+        <td>${escapeHtml(c.cliente || "-")}${c.automatico ? ` <span class="conta-badge conta-badge--1" style="width:auto;border-radius:10px;padding:1px 7px;font-size:9px;">auto</span>` : ""}</td>
         <td>${escapeHtml(c.categoria || "-")}</td>
         <td class="num">${fmtMoney(c.valor)}</td>
         <td>${fmtStatusBadge_(statusExibido)}</td>
-        <td>${c.status === "A receber" ? `<button type="button" class="btn btn--ghost btn--icon acao-conta-receber" data-id="${c.id}" data-acao="marcar_conta_receber_recebida" title="Marcar como recebido">✓</button>` : ""}
-          <button type="button" class="btn btn--ghost btn--icon acao-conta-receber" data-id="${c.id}" data-acao="excluir_conta_receber" title="Excluir">✕</button></td>
+        <td>${c.automatico ? `<span class="muted" style="font-size:11px;">liberação automática</span>` : `
+          ${c.status === "A receber" ? `<button type="button" class="btn btn--ghost btn--icon acao-conta-receber" data-id="${c.id}" data-acao="marcar_conta_receber_recebida" title="Marcar como recebido">✓</button>` : ""}
+          <button type="button" class="btn btn--ghost btn--icon acao-conta-receber" data-id="${c.id}" data-acao="excluir_conta_receber" title="Excluir">✕</button>`}</td>
       </tr>`;
     }).join("");
 
