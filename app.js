@@ -13,7 +13,6 @@
   const els = {
     emptyState: document.getElementById("emptyState"),
     dashboard: document.getElementById("dashboard"),
-    kpiRow: document.getElementById("kpiRow"),
     diretrizFilters: document.getElementById("diretrizFilters"),
     classifFilters: document.getElementById("classifFilters"),
     searchInput: document.getElementById("searchInput"),
@@ -167,7 +166,6 @@
     renderHero();
     renderAcoesHoje();
     renderMeta();
-    renderKpis();
     renderAbc();
     renderTendencia();
     renderRuptura();
@@ -505,23 +503,6 @@
     }).join("");
   }
 
-  function renderKpis() {
-    const counts = {};
-    state.produtos.forEach((p) => {
-      const key = diretrizClass(p["DIRETRIZ"]);
-      counts[key] = (counts[key] || 0) + 1;
-    });
-    const order = [
-      ["foco", "🔵 FOCO"], ["manutencao", "🟢 MANUTENÇÃO"], ["despriorizado", "🟡 DESPRIORIZADO"],
-      ["saida", "🔴 SAÍDA"], ["ignorar", "⚫ IGNORAR"],
-    ];
-    els.kpiRow.innerHTML = order.map(([key, label]) => `
-      <div class="kpi-card badge--${key}" style="border-color: transparent;">
-        <span class="kpi-card__count">${counts[key] || 0}</span>
-        <span class="kpi-card__label">${label}</span>
-      </div>`).join("");
-  }
-
   function renderFilters() {
     const diretrizes = [...new Set(state.produtos.map((p) => p["DIRETRIZ"]).filter(Boolean))];
     const classifs = [...new Set(state.produtos.map((p) => p["Classificação"]).filter(Boolean))];
@@ -606,6 +587,20 @@
       : `<span class="produto-foto produto-foto--vazia"></span>`;
   }
 
+  // Selo minimalista mostrando de qual conta do Mercado Livre o produto
+  // vem — "1", "2", ou as duas pontinhas juntas quando ele é vendido nas
+  // duas. Quando tem link do anúncio da conta 2, o "2" já é clicável.
+  function fmtContaBadge(contas, linkConta2) {
+    if (!contas) return "";
+    if (contas === "1 + 2") {
+      return `<span class="conta-badge conta-badge--1">1</span>` +
+        (linkConta2
+          ? `<a href="${linkConta2}" target="_blank" rel="noopener" class="conta-badge conta-badge--2">2</a>`
+          : `<span class="conta-badge conta-badge--2">2</span>`);
+    }
+    return `<span class="conta-badge conta-badge--${contas}">${contas}</span>`;
+  }
+
   function renderTable() {
     const rows = filteredSortedProducts();
     els.rowCount.textContent = `(${rows.length})`;
@@ -613,6 +608,7 @@
       <tr class="data-row" data-idx="${i}">
         <td>${fmtFoto(p["Foto URL"])}</td>
         <td>${fmtSkuLink(p["SKUs"], p["Link Anúncio"])}</td>
+        <td>${fmtContaBadge(p["Contas"], p["Link Anúncio Conta 2"])}</td>
         <td>${escapeHtml(p["Fornecedor"] ?? "-")}</td>
         <td>${escapeHtml(p["Categorias"] ?? "-")}</td>
         <td class="num">${fmtPrecoComPromo(p["Preço Original"], p["Preço Atual"])}</td>
@@ -985,38 +981,150 @@
     renderFinanceiro();
   });
 
-  function renderHero() {
-    const fin = state.financeiro_diario;
-    if (!fin.length) return;
-    const hoje = fin[fin.length - 1];
-    const anteriores = fin.slice(Math.max(0, fin.length - 8), fin.length - 1); // até 7 dias antes de hoje
-    const mediaAnterior = (campo) => anteriores.length
-      ? anteriores.reduce((s, d) => s + Number(d[campo] || 0), 0) / anteriores.length
-      : 0;
-
-    const unidadesPorDia = (idx) => state.saida_diaria.reduce((s, p) => s + Number((p.serie[idx] || {}).quantidade || 0), 0);
-    const idxHoje = (state.saida_diaria[0]?.serie.length || 1) - 1;
-    const unidadesHoje = unidadesPorDia(idxHoje);
-    let unidadesMedia = 0;
-    if (idxHoje > 0) {
-      const janela = Math.min(7, idxHoje);
-      for (let k = 1; k <= janela; k++) unidadesMedia += unidadesPorDia(idxHoje - k);
-      unidadesMedia = unidadesMedia / janela;
-    }
-
-    setHeroStat('heroFaturamento', 'heroFaturamentoDelta', fmtMoney(hoje.faturamento), hoje.faturamento, mediaAnterior('faturamento'));
-    setHeroStat('heroUnidades', 'heroUnidadesDelta', fmtNum(unidadesHoje), unidadesHoje, unidadesMedia);
-    setHeroStat('heroLucro', 'heroLucroDelta', fmtMoney(hoje.lucro_liquido), hoje.lucro_liquido, mediaAnterior('lucro_liquido'));
+  // ------------------------------------------------- "Vendas de hoje ao vivo"
+  // Réplica do painel do próprio Mercado Livre — sempre HOJE, sem filtro de
+  // data, e somando as duas contas (não tem opção de olhar só uma aqui,
+  // de propósito, pra ficar simples e direto como o original).
+  function transacoesCombinadas_() {
+    return state.transacoes.concat(state.transacoes_2);
   }
 
-  function setHeroStat(valueId, deltaId, displayValue, valor, media) {
-    document.getElementById(valueId).textContent = displayValue;
-    const deltaEl = document.getElementById(deltaId);
-    if (!media || media === 0) { deltaEl.textContent = ''; deltaEl.className = 'hero__caption'; return; }
-    const pct = ((valor - media) / media) * 100;
-    const seta = pct >= 0 ? '▲' : '▼';
-    deltaEl.textContent = `${seta} ${Math.abs(pct).toFixed(0)}% vs média`;
-    deltaEl.className = 'hero__caption ' + (pct >= 0 ? 'up' : 'down');
+  function transacoesDoDia_(isoDate) {
+    return transacoesCombinadas_().filter((t) => (t.data || "").slice(0, 10) === isoDate);
+  }
+
+  function totaisDoDia_(isoDate) {
+    const txs = transacoesDoDia_(isoDate);
+    const pedidos = new Set();
+    let faturamento = 0, unidades = 0, lucro = 0;
+    txs.forEach((t) => {
+      faturamento += Number(t.faturamento || 0);
+      unidades += Number(t.quantidade || 0);
+      lucro += Number(t.lucro || 0);
+      if (t.pedido_id) pedidos.add(t.pedido_id);
+    });
+    return { faturamento, unidades, lucro, numVendas: pedidos.size };
+  }
+
+  function renderHero() {
+    const hoje = isoDate_(new Date());
+    const totais = totaisDoDia_(hoje);
+
+    document.getElementById("heroFaturamento").textContent = fmtMoney(totais.faturamento);
+    document.getElementById("heroUnidades").textContent = fmtNum(totais.unidades);
+    document.getElementById("heroLucro").textContent = fmtMoney(totais.lucro);
+
+    const agora = new Date();
+    document.getElementById("heroAtualizadoEm").textContent =
+      "Atualizado às " + String(agora.getHours()).padStart(2, "0") + ":" + String(agora.getMinutes()).padStart(2, "0");
+
+    renderMetricasChaveHoje_(totais);
+    renderTendenciaHoraria_();
+    renderMaisVendidosHoje_(hoje);
+  }
+
+  function renderMetricasChaveHoje_(totais) {
+    const ticketMedio = totais.numVendas ? totais.faturamento / totais.numVendas : 0;
+    const margem = totais.faturamento ? totais.lucro / totais.faturamento : 0;
+    document.getElementById("metricasChaveHoje").innerHTML = `
+      <div class="metrica-chave">
+        <span class="metrica-chave__valor">${fmtNum(totais.numVendas)}</span>
+        <span class="metrica-chave__label">Quantidade de vendas</span>
+      </div>
+      <div class="metrica-chave">
+        <span class="metrica-chave__valor">${fmtMoney(ticketMedio)}</span>
+        <span class="metrica-chave__label">Ticket médio</span>
+      </div>
+      <div class="metrica-chave">
+        <span class="metrica-chave__valor">${fmtPct(margem)}</span>
+        <span class="metrica-chave__label">Margem líquida hoje</span>
+      </div>
+      <div class="metrica-chave metrica-chave--indisponivel">
+        <span class="metrica-chave__valor">—</span>
+        <span class="metrica-chave__label">Visitas e conversão (ainda não disponível)</span>
+      </div>`;
+  }
+
+  let tendenciaHorariaChart = null;
+  function renderTendenciaHoraria_() {
+    if (!chartJsDisponivel_("tendenciaHorariaChart")) return;
+
+    const hoje = new Date();
+    const ontem = new Date(hoje); ontem.setDate(ontem.getDate() - 1);
+    const isoHoje = isoDate_(hoje), isoOntem = isoDate_(ontem);
+
+    const porHora = (isoDia) => {
+      const horas = new Array(24).fill(0);
+      transacoesDoDia_(isoDia).forEach((t) => {
+        if (!t.data_hora) return;
+        const h = new Date(t.data_hora).getHours();
+        horas[h] += Number(t.faturamento || 0);
+      });
+      return horas;
+    };
+
+    const serieHoje = porHora(isoHoje);
+    const serieOntem = porHora(isoOntem);
+    // Depois da hora atual, "hoje" ainda não tem como ter dado — corta a
+    // linha ali (fica igual ao gráfico do Mercado Livre, que também para
+    // no relógio, em vez de cair pra zero de propósito).
+    const horaAtual = hoje.getHours();
+    const serieHojeCortada = serieHoje.map((v, h) => (h <= horaAtual ? v : null));
+
+    if (tendenciaHorariaChart) tendenciaHorariaChart.destroy();
+    tendenciaHorariaChart = new Chart(document.getElementById("tendenciaHorariaChart"), {
+      type: "line",
+      data: {
+        labels: Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0")),
+        datasets: [
+          { label: "Hoje", data: serieHojeCortada, borderColor: "#5B9CFF", backgroundColor: "transparent", tension: 0.35, pointRadius: 0, spanGaps: false },
+          { label: "Ontem", data: serieOntem, borderColor: "#FF6B9D", backgroundColor: "transparent", tension: 0.35, pointRadius: 0 },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: true, position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } } },
+        scales: { x: { title: { display: true, text: "Horas", font: { size: 10 } }, ticks: { font: { size: 10 } } }, y: { ticks: { font: { size: 10 } } } },
+      },
+    });
+  }
+
+  function renderMaisVendidosHoje_(isoDia) {
+    const fotoPorSku = {}, linkPorSku = {}, estoquePorSku = {};
+    state.produtos.forEach((p) => {
+      fotoPorSku[p["SKUs"]] = p["Foto URL"];
+      linkPorSku[p["SKUs"]] = p["Link Anúncio"];
+      estoquePorSku[p["SKUs"]] = Number(p["Estoque AnyMarket disponível"] || 0);
+    });
+
+    const grupos = {};
+    transacoesDoDia_(isoDia).forEach((t) => {
+      if (!grupos[t.sku]) grupos[t.sku] = { sku: t.sku, faturamento: 0 };
+      grupos[t.sku].faturamento += Number(t.faturamento || 0);
+    });
+    const top = Object.values(grupos).sort((a, b) => b.faturamento - a.faturamento).slice(0, 5);
+
+    const lista = document.getElementById("maisVendidosHojeLista");
+    if (!top.length) {
+      lista.innerHTML = `<p class="muted" style="padding:16px;text-align:center;">Nenhuma venda hoje ainda.</p>`;
+      return;
+    }
+    lista.innerHTML = top.map((item, i) => {
+      const estoque = estoquePorSku[item.sku];
+      const avisoEstoque = estoque !== undefined && estoque <= 5
+        ? `<span style="color:var(--saida);"> ⚠ estoque baixo</span>` : "";
+      return `
+        <div class="mv-item ${i === 0 ? "mv-item--primeiro" : ""}">
+          <span class="mv-item__rank">${i + 1}</span>
+          ${fmtFoto(fotoPorSku[item.sku])}
+          <div class="mv-item__info">
+            <div class="mv-item__titulo">${fmtSkuLink(item.sku, linkPorSku[item.sku])}</div>
+            <div class="mv-item__meta">Estoque: ${fmtNum(estoque)} unidades${avisoEstoque}</div>
+          </div>
+          <span class="mv-item__valor">${fmtMoney(item.faturamento)}</span>
+        </div>`;
+    }).join("");
   }
 
   function renderTendencia() {
