@@ -42,6 +42,8 @@
     mesFinanceiro: null,
     diaFinanceiro: null,
     contaFinanceiro: "ambas",
+    caixaMes: null,
+    caixaOrigem: "todas",
     periodoView: "dia",
     transModo: "detalhado",
     sortKey: "qtd30",
@@ -121,6 +123,7 @@
       state.transacoes_2 = data.transacoes_2 || [];
       state.devolucoes = data.devolucoes || [];
       state.devolucoes_2 = data.devolucoes_2 || [];
+      state.movimentos_mp = data.movimentos_mp || [];
       state.produtos_conta1_raw = data.produtos_conta1_raw || [];
       state.produtos_conta2_raw = data.produtos_conta2_raw || [];
 
@@ -182,6 +185,7 @@
     renderTodosPeriodoPickers_();
     renderEstoque();
     renderFinanceiro();
+    renderCaixa();
     renderFilters();
     renderTable();
     renderCharts();
@@ -1307,6 +1311,140 @@
     state.contaFinanceiro = btn.dataset.conta;
     renderFinanceiro();
   });
+
+  // --------------------------------------------------------------- Caixa
+  // Plano de contas do módulo financeiro (baseado na especificação que
+  // você mandou) — cada categoria já sabe se entra ou não na DRE, pra você
+  // não ter que marcar isso na mão em cada lançamento.
+  const PLANO_CONTAS = [
+    { grupo: "Receitas", impactaDre: true, categorias: ["Receita Marketplace", "Outras Receitas", "Reembolsos"] },
+    { grupo: "Custos", impactaDre: true, categorias: ["Mercadorias", "Matéria-prima", "Embalagens", "Fretes", "Produção"] },
+    { grupo: "Despesas Operacionais", impactaDre: true, categorias: ["Marketing", "Contabilidade", "Sistemas", "Internet", "Energia", "Telefonia", "Aluguel", "Pró-labore", "Serviços de terceiros", "Logística", "Tarifas bancárias"] },
+    { grupo: "Financeiras", impactaDre: true, categorias: ["Juros", "IOF", "Antecipações", "Tarifas financeiras"] },
+    { grupo: "Patrimoniais (fora da DRE)", impactaDre: false, categorias: ["Empréstimos recebidos", "Pagamento de empréstimos", "Transferências entre contas", "Aportes", "Distribuição de lucros", "Retirada de sócios"] },
+  ];
+
+  function categoriaImpactaDre_(categoria) {
+    for (const g of PLANO_CONTAS) if (g.categorias.includes(categoria)) return g.impactaDre;
+    return true; // categoria desconhecida/vazia: assume que entra, pra não escondermos nada por engano
+  }
+
+  function opcoesPlanoContasHtml_(categoriaAtual) {
+    return `<option value="">— categorizar —</option>` + PLANO_CONTAS.map((g) => `
+      <optgroup label="${escapeHtml(g.grupo)}">
+        ${g.categorias.map((c) => `<option value="${escapeHtml(c)}" ${c === categoriaAtual ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
+      </optgroup>`).join("");
+  }
+
+  function mesesDisponiveisCaixa_() {
+    const set = new Set();
+    (state.movimentos_mp || []).forEach((m) => { const mm = (m.data || "").slice(0, 7); if (mm) set.add(mm); });
+    const hoje = new Date();
+    set.add(`${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`);
+    return Array.from(set).sort().reverse();
+  }
+
+  function popularCaixaMesSelect_() {
+    const sel = document.getElementById("caixaMesSelect");
+    const meses = mesesDisponiveisCaixa_();
+    const opts = meses.map((m) => `<option value="${m}">${fmtMesLabel_(m + "-01")}</option>`).join("");
+    if (sel.dataset.opcoes !== meses.join(",")) {
+      sel.innerHTML = opts;
+      sel.dataset.opcoes = meses.join(",");
+    }
+    if (state.caixaMes && meses.includes(state.caixaMes)) sel.value = state.caixaMes;
+    else { state.caixaMes = meses[0]; sel.value = state.caixaMes; }
+  }
+
+  document.getElementById("caixaMesSelect").addEventListener("change", (e) => {
+    state.caixaMes = e.target.value;
+    renderCaixa();
+  });
+
+  document.getElementById("caixaOrigemToggle").addEventListener("click", (e) => {
+    const btn = e.target.closest(".toggle-btn");
+    if (!btn) return;
+    document.querySelectorAll("#caixaOrigemToggle .toggle-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.caixaOrigem = btn.dataset.origem;
+    renderCaixa();
+  });
+
+  function renderCaixa() {
+    popularCaixaMesSelect_();
+    const yyyyMM = state.caixaMes;
+    if (!yyyyMM) return;
+
+    let linhas = (state.movimentos_mp || []).filter((m) => (m.data || "").slice(0, 7) === yyyyMM);
+    if (state.caixaOrigem !== "todas") linhas = linhas.filter((m) => m.origem === state.caixaOrigem);
+    linhas = linhas.slice().sort((a, b) => (a.data < b.data ? 1 : -1));
+
+    const totalEntradas = linhas.reduce((s, m) => s + Number(m.valor || 0), 0);
+    const totalMarketplace = linhas.filter((m) => m.origem === "Mercado Livre").reduce((s, m) => s + Number(m.valor || 0), 0);
+    const totalOutras = totalEntradas - totalMarketplace;
+    const naoCategorizados = linhas.filter((m) => !m.categoria).length;
+
+    document.getElementById("caixaKpiRow").innerHTML = `
+      <div class="fin-kpi fin-kpi--in">
+        <span class="fin-kpi__value">${fmtMoney(totalEntradas)}</span>
+        <span class="fin-kpi__label">Total de entradas — ${fmtMesLabel_(yyyyMM + "-01")}</span>
+      </div>
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtMoney(totalMarketplace)}</span>
+        <span class="fin-kpi__label">Receita Marketplace (auto)</span>
+      </div>
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtMoney(totalOutras)}</span>
+        <span class="fin-kpi__label">Outras entradas</span>
+      </div>
+      <div class="fin-kpi ${naoCategorizados > 0 ? "fin-kpi--out" : ""}">
+        <span class="fin-kpi__value">${fmtNum(naoCategorizados)}</span>
+        <span class="fin-kpi__label">Lançamentos sem categoria</span>
+      </div>`;
+
+    document.getElementById("caixaCount").textContent = `(${linhas.length})`;
+    document.getElementById("caixaBody").innerHTML = linhas.map((m) => `
+      <tr>
+        <td>${(m.data || "").split("-").reverse().join("/")}</td>
+        <td class="titulo-cell" style="max-width:280px;">${escapeHtml(m.descricao || "-")}</td>
+        <td><span class="conta-badge conta-badge--${m.origem === "Mercado Livre" ? "1" : "2"}" style="width:auto;border-radius:10px;padding:2px 8px;">${escapeHtml(m.origem || "-")}</span></td>
+        <td class="sku-cell">${escapeHtml(m.pedido_ml || "-")}</td>
+        <td>
+          <select class="search-input categoria-mp-select" data-pagamento-id="${escapeHtml(m.pagamento_id)}" style="min-width:170px;">
+            ${opcoesPlanoContasHtml_(m.categoria)}
+          </select>
+        </td>
+        <td class="num">${fmtMoney(m.valor)}${Number(m.valor_reembolsado) > 0 ? `<br><span class="price-promo">-${fmtMoney(m.valor_reembolsado)} reemb.</span>` : ""}</td>
+        <td>${m.status_liberacao === "released" ? "✅ Liberado" : m.status_liberacao === "pending" ? "⏳ Pendente" : escapeHtml(m.status_liberacao || "-")}</td>
+      </tr>`).join("");
+
+    document.querySelectorAll(".categoria-mp-select").forEach((sel) => {
+      sel.addEventListener("change", () => salvarCategoriaMovimentoMP_(sel));
+    });
+  }
+
+  async function salvarCategoriaMovimentoMP_(select) {
+    const pagamentoId = select.dataset.pagamentoId;
+    const categoria = select.value;
+    if (!categoria) return;
+    const cfg = loadConfig();
+    select.disabled = true;
+    try {
+      const resp = await fetch(cfg.apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ token: cfg.apiToken, acao: "categorizar_movimento_mp", pagamento_id: pagamentoId, categoria, salvar_regra: true }),
+      });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "erro");
+      const mov = (state.movimentos_mp || []).find((m) => m.pagamento_id === pagamentoId);
+      if (mov) mov.categoria = categoria;
+    } catch (err) {
+      alert("Não foi possível salvar a categoria: " + err.message);
+    } finally {
+      select.disabled = false;
+    }
+  }
 
   document.getElementById("financeiroToggle").addEventListener("click", (e) => {
     const btn = e.target.closest(".toggle-btn");

@@ -70,6 +70,7 @@
       <button type="button" class="tab-btn" data-tab="produtos">Produtos</button>
       <button type="button" class="tab-btn" data-tab="estoque">Estoque</button>
       <button type="button" class="tab-btn" data-tab="financeiro">Financeiro</button>
+      <button type="button" class="tab-btn" data-tab="caixa">Caixa</button>
     </nav>
 
     <!-- ==================================================== TAB: HOJE -->
@@ -416,6 +417,47 @@
               </tr>
             </thead>
             <tbody id="comparativoBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </section>
+
+    <!-- =================================================== TAB: CAIXA -->
+    <section class="tab-panel" data-tab="caixa">
+
+      <h2 class="section-title">Caixa <span class="muted">— tudo que entrou, já cruzado com o Mercado Livre quando possível</span></h2>
+      <section class="panel financeiro">
+        <div class="panel__header">
+          <h2 class="panel__title">Caixa <span class="muted">— escolha o mês e a origem</span></h2>
+          <div class="fin-header-controls">
+            <select id="caixaMesSelect" class="search-input" style="max-width:160px;flex:none;"></select>
+            <div class="toggle-group" id="caixaOrigemToggle">
+              <button type="button" class="toggle-btn active" data-origem="todas">Todas as origens</button>
+              <button type="button" class="toggle-btn" data-origem="Mercado Livre">Mercado Livre</button>
+              <button type="button" class="toggle-btn" data-origem="Outro">Outras entradas</button>
+            </div>
+          </div>
+        </div>
+        <div class="fin-kpi-row" id="caixaKpiRow"></div>
+      </section>
+
+      <h2 class="section-title">Lançamentos <span id="caixaCount" class="muted"></span></h2>
+      <section class="panel">
+        <div class="table-wrap">
+          <table id="caixaTable">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Descrição</th>
+                <th>Origem</th>
+                <th>Pedido ML</th>
+                <th>Categoria</th>
+                <th class="num">Valor</th>
+                <th>Liberação</th>
+              </tr>
+            </thead>
+            <tbody id="caixaBody"></tbody>
           </table>
         </div>
       </section>
