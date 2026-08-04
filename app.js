@@ -1375,6 +1375,49 @@
     renderCaixa();
   });
 
+  // Nomes amigáveis pros métodos de pagamento que o Mercado Pago devolve —
+  // lista não exaustiva, qualquer um não mapeado aparece com a primeira
+  // letra maiúscula, então nunca fica em branco.
+  const METODOS_PAGAMENTO_MP = {
+    account_money: "Saldo em conta",
+    pix: "Pix",
+    credit_card: "Cartão de crédito",
+    debit_card: "Cartão de débito",
+    bank_transfer: "Transferência bancária",
+    ticket: "Boleto",
+  };
+  function fmtMetodoPagamento_(metodo) {
+    if (!metodo) return "Não identificado";
+    if (METODOS_PAGAMENTO_MP[metodo]) return METODOS_PAGAMENTO_MP[metodo];
+    return metodo.charAt(0).toUpperCase() + metodo.slice(1).replace(/_/g, " ");
+  }
+
+  // "De onde entrou": agrupa por Mercado Livre (que já sabemos com
+  // certeza) e, pro resto, pelo método de pagamento — assim ainda dá pra
+  // distinguir Pix de transferência, mesmo sem ter vindo de uma venda.
+  function renderOrigemBreakdown_(linhas) {
+    const grupos = {};
+    linhas.forEach((m) => {
+      const chave = m.origem === "Mercado Livre" ? "Mercado Livre" : fmtMetodoPagamento_(m.metodo_pagamento);
+      grupos[chave] = (grupos[chave] || 0) + Number(m.valor || 0);
+    });
+    const total = Object.values(grupos).reduce((s, v) => s + v, 0);
+    const ordenado = Object.entries(grupos).sort((a, b) => b[1] - a[1]);
+
+    const el = document.getElementById("caixaOrigemBreakdown");
+    if (!ordenado.length || !total) { el.innerHTML = ""; return; }
+    el.innerHTML = `<div class="origem-breakdown__titulo">De onde entrou</div>` +
+      ordenado.map(([nome, valor]) => {
+        const pct = (valor / total) * 100;
+        return `
+          <div class="origem-item">
+            <span class="origem-item__nome">${escapeHtml(nome)}</span>
+            <div class="origem-item__barra-fundo"><div class="origem-item__barra" style="width:${pct.toFixed(1)}%"></div></div>
+            <span class="origem-item__valor">${fmtMoney(valor)} · ${pct.toFixed(0)}%</span>
+          </div>`;
+      }).join("");
+  }
+
   function renderCaixa() {
     popularCaixaMesSelect_();
     const yyyyMM = state.caixaMes;
@@ -1388,6 +1431,8 @@
     const totalMarketplace = linhas.filter((m) => m.origem === "Mercado Livre").reduce((s, m) => s + Number(m.valor || 0), 0);
     const totalOutras = totalEntradas - totalMarketplace;
     const naoCategorizados = linhas.filter((m) => !m.categoria).length;
+
+    renderOrigemBreakdown_(linhas);
 
     document.getElementById("caixaKpiRow").innerHTML = `
       <div class="fin-kpi fin-kpi--in">

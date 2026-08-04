@@ -242,6 +242,15 @@ td.titulo-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; wh
 .toggle-btn.active { background: #fff; color: #000; }
 .fin-kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
 @media (max-width: 860px) { .fin-kpi-row { grid-template-columns: repeat(2, 1fr); } }
+
+/* ---------- quebra "de onde entrou" (Caixa) ------------------------------ */
+.origem-breakdown { margin-top: 4px; }
+.origem-breakdown__titulo { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); margin-bottom: 10px; }
+.origem-item { display: grid; grid-template-columns: 140px 1fr 90px; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12.5px; }
+.origem-item__nome { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.origem-item__barra-fundo { background: var(--panel-2); border-radius: 6px; height: 16px; overflow: hidden; }
+.origem-item__barra { height: 100%; border-radius: 6px; background: var(--foco); }
+.origem-item__valor { text-align: right; color: var(--ink-muted); font-family: var(--font-mono); white-space: nowrap; }
 .fin-kpi-row--3col { grid-template-columns: repeat(3, 1fr); }
 @media (max-width: 860px) { .fin-kpi-row--3col { grid-template-columns: 1fr; } }
 
