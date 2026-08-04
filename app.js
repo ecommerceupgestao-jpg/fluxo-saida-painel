@@ -366,6 +366,7 @@
       const estoque = Number(p["Estoque AnyMarket disponível"] || 0);
       const custo = Number(p["Custo Unitário"] || 0);
       const preco = Number(p["Preço Atual"] || 0);
+      const precoOriginal = Number(p["Preço Original"] || 0);
       // Antes usava a margem histórica de 12 meses (Lucro 12M / Faturamento
       // 12M) pra estimar o lucro potencial do estoque parado. Isso dava
       // valores sem sentido em produtos com pouco histórico de venda: um
@@ -374,7 +375,10 @@
       // de todo o estoque parado, o "lucro potencial" saía completamente
       // fora da realidade. Agora usa a margem simples e sempre coerente
       // entre o preço de venda ATUAL e o custo ATUAL do produto — não
-      // depende de quantas vendas ele já teve.
+      // depende de quantas vendas ele já teve, e já reflete automaticamente
+      // qualquer promoção ativa no Mercado Livre, porque "Preço Atual" vem
+      // do endpoint que reporta o preço realmente cobrado agora (com
+      // desconto ativo, se houver) — não o preço de tabela.
       const margem = preco > 0 ? (preco - custo) / preco : 0;
       const valorParado = estoque * custo;
       const valorPotencial = estoque * preco;
@@ -382,7 +386,7 @@
       totalParado += valorParado;
       totalPotencial += valorPotencial;
       totalLucroPotencial += lucroPotencial;
-      return { sku: p["SKUs"], foto: p["Foto URL"], link: p["Link Anúncio"], estoque, custo, valorParado, preco, margem, lucroPotencial };
+      return { sku: p["SKUs"], foto: p["Foto URL"], link: p["Link Anúncio"], estoque, custo, valorParado, preco, precoOriginal, margem, lucroPotencial };
     }).sort((a, b) => b.valorParado - a.valorParado);
 
     document.getElementById("estoqueKpiRow").innerHTML = `
@@ -411,7 +415,7 @@
           <span class="custo-save-msg" data-sku-msg="${escapeHtml(l.sku)}"></span>
         </td>
         <td class="num">${fmtMoney(l.valorParado)}</td>
-        <td class="num">${fmtMoney(l.preco)}</td>
+        <td class="num">${fmtPrecoComPromo(l.precoOriginal, l.preco)}</td>
         <td class="num">${fmtPct(l.margem)}</td>
         <td class="num">${fmtMoney(l.lucroPotencial)}</td>
       </tr>`).join("");
