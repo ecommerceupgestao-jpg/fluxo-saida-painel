@@ -51,6 +51,9 @@
     search: "",
     diretrizFiltro: new Set(),
     classifFiltro: new Set(),
+    // Filtro do card "Capital da empresa": "hoje" é a foto real; "mes" e
+    // "dia" trocam pra visão de movimento do período escolhido.
+    capitalPeriodo: { modo: "hoje", valor: "" },
   };
 
   let dailyChart, monthlyChart, financeiroChart;
@@ -554,25 +557,216 @@
     }
   }
 
-  function renderAbc() {
-    const total = state.curva_abc.reduce((s, c) => s + Number(c["Faturamento 12M"] || 0), 0);
-    const grupos = { A: [], B: [], C: [] };
-    state.curva_abc.forEach((c) => {
-      const g = c["Grade Faturamento"];
-      if (grupos[g]) grupos[g].push(c);
+  // ===================================================== CURVA ABC / PERFIL
+  //
+  // Classifica uma lista pelo método clássico de Pareto: ordena do maior
+  // pro menor, vai acumulando, e corta em 80% e 95%.
+  //   A = os que somam os primeiros 80% do total
+  //   B = os próximos 15% (até 95%)
+  //   C = a cauda, os últimos 5%
+  //
+  // Devolve um mapa chave → "A" | "B" | "C". Quem tem valor zero ou
+  // negativo fica de fora (não classifica), senão a cauda vira uma massa
+  // de zeros que distorce os cortes.
+  function classificarAbc_(itens, valorDe, chaveDe) {
+    const validos = itens.filter((i) => valorDe(i) > 0)
+      .sort((a, b) => valorDe(b) - valorDe(a));
+    const total = validos.reduce((s, i) => s + valorDe(i), 0);
+    const classe = {};
+    let acumulado = 0;
+    validos.forEach((i) => {
+      acumulado += valorDe(i);
+      const p = total > 0 ? acumulado / total : 1;
+      classe[chaveDe(i)] = p <= 0.8 ? "A" : p <= 0.95 ? "B" : "C";
     });
-    document.getElementById("abcRow").innerHTML = ["A", "B", "C"].map((letra) => {
-      const lista = grupos[letra];
-      const soma = lista.reduce((s, c) => s + Number(c["Faturamento 12M"] || 0), 0);
-      const pct = total ? (soma / total) * 100 : 0;
+    return classe;
+  }
+
+  // Perfil do produto, cruzando as curvas COM a margem.
+  //
+  // A ideia vem da planilha: uma letra só não diz o que fazer com o
+  // produto. Vender muito com margem apertada é um negócio; vender pouco
+  // com margem alta é outro. O cruzamento é que orienta a decisão.
+  //
+  // A margem entra porque só as letras não bastam. Testei sem ela e um
+  // produto com 50% de margem, respondendo por 36% do lucro da casa, caiu
+  // em "Potencial" — só porque o corte de Pareto do lucro é estreito e ele
+  // ficou em B. Margem é o que de fato separa Premium de Volume.
+  //
+  // REGRA USADA (se a sua for diferente, me diz que eu ajusto):
+  //   Estrela   A em lucro e gira bem (A ou B em quantidade)
+  //   Premium   lucro relevante (A ou B) e margem acima da mediana, mas
+  //             gira pouco — cada venda vale muito, não sacrifique preço
+  //   Volume    gira bem (A ou B em quantidade) com margem abaixo da
+  //             mediana — aqui um ajuste de preço rende
+  //   Potencial tem A ou B em alguma das três, sem se encaixar acima
+  //   Análise   C em tudo, ou sem venda nos 12 meses
+  const PERFIL_ORDEM = { "Estrela": 1, "Premium": 2, "Volume": 3, "Potencial": 4, "Análise": 5 };
+
+  function medianaMargem_(itens) {
+    const ms = itens.filter((i) => i.fat12m > 0).map((i) => i.lucro12m / i.fat12m).sort((a, b) => a - b);
+    if (!ms.length) return 0;
+    const meio = Math.floor(ms.length / 2);
+    return ms.length % 2 ? ms[meio] : (ms[meio - 1] + ms[meio]) / 2;
+  }
+
+  function perfilProduto_(cFat, cLucro, cQtd, margem, margemMediana) {
+    if (!cFat && !cLucro && !cQtd) return "Análise";
+    const giraBem = cQtd === "A" || cQtd === "B";
+    const lucroBom = cLucro === "A" || cLucro === "B";
+    const margemAlta = margem > margemMediana;
+
+    if (cLucro === "A" && giraBem) return "Estrela";
+    if (lucroBom && margemAlta && !giraBem) return "Premium";
+    if (giraBem && !margemAlta) return "Volume";
+    if (cFat === "A" || cFat === "B" || lucroBom || giraBem) return "Potencial";
+    return "Análise";
+  }
+
+  // Monta a curva a partir dos dados do próprio site (Mercado Livre), em
+  // vez de ler uma curva pronta de uma aba. Assim ela reflete o que
+  // aconteceu de verdade nos últimos 12 meses, sem depender de a planilha
+  // ter sido recalculada.
+  function construirCurvaAbc_() {
+    // Consolida por SKU: a curva é do PRODUTO, não do anúncio. O mesmo SKU
+    // nas duas contas é um produto só na hora de decidir estratégia.
+    const porSku = new Map();
+    (state.linhasProdutosPorConta || []).forEach((p) => {
+      const a = porSku.get(p.sku) || {
+        sku: p.sku, titulo: p.titulo, fornecedor: p.fornecedor, categoria: p.categoria,
+        foto: p.foto, link: p.link,
+        fat12m: 0, lucro12m: 0, qtd12m: 0, qtd30: 0, estoque: 0, custo: 0, inativo: true,
+      };
+      a.fat12m += Number(p.fat12m || 0);
+      a.lucro12m += Number(p.lucro12m || 0);
+      a.qtd12m += Number(p.qtd12m || 0);
+      a.qtd30 += Number(p.qtd30 || 0);
+      a.estoque += Number(p.estoque || 0);
+      a.custo = Math.max(a.custo, Number(p.custo || 0));
+      if (!p.inativo) a.inativo = false;
+      if (!a.titulo && p.titulo) a.titulo = p.titulo;
+      porSku.set(p.sku, a);
+    });
+
+    const itens = Array.from(porSku.values());
+    const chave = (i) => i.sku;
+    const cFat   = classificarAbc_(itens, (i) => i.fat12m,   chave);
+    const cLucro = classificarAbc_(itens, (i) => i.lucro12m, chave);
+    const cQtd   = classificarAbc_(itens, (i) => i.qtd12m,   chave);
+    // Curva do giro ATUAL (últimos 30 dias) — é a que mostra o que está
+    // vendendo agora, não o que vendeu no ano passado.
+    const cAtual = classificarAbc_(itens, (i) => i.qtd30, chave);
+
+    const margemMediana = medianaMargem_(itens);
+    itens.forEach((i) => {
+      i.classeFat   = cFat[i.sku]   || "";
+      i.classeLucro = cLucro[i.sku] || "";
+      i.classeQtd   = cQtd[i.sku]   || "";
+      i.classeAtual = cAtual[i.sku] || "";
+      i.margem = i.fat12m > 0 ? i.lucro12m / i.fat12m : 0;
+      i.perfil = perfilProduto_(i.classeFat, i.classeLucro, i.classeQtd, i.margem, margemMediana);
+      // Dias de estoque no ritmo dos últimos 30 dias
+      const porDia = i.qtd30 / 30;
+      i.diasEstoque = porDia > 0 ? Math.round(i.estoque / porDia) : null;
+    });
+
+    itens.sort((a, b) => {
+      const d = (PERFIL_ORDEM[a.perfil] || 9) - (PERFIL_ORDEM[b.perfil] || 9);
+      return d !== 0 ? d : b.fat12m - a.fat12m;
+    });
+    return itens;
+  }
+
+  function renderAbc() {
+    const itens = construirCurvaAbc_();
+    const el = document.getElementById("abcRow");
+    if (!el) return;
+
+    if (!itens.length) {
+      el.innerHTML = `<p class="muted">Sem dados de venda para montar a curva.</p>`;
+      return;
+    }
+
+    const totalFat = itens.reduce((s, i) => s + i.fat12m, 0);
+    const totalLucro = itens.reduce((s, i) => s + i.lucro12m, 0);
+
+    const PERFIS = ["Estrela", "Premium", "Volume", "Potencial", "Análise"];
+    const EXPLICA = {
+      "Estrela":   "vende muito e dá lucro",
+      "Premium":   "gira pouco, cada venda vale muito",
+      "Volume":    "gira muito, margem apertada",
+      "Potencial": "perto de subir de faixa",
+      "Análise":   "revisar se vale continuar",
+    };
+
+    const cards = PERFIS.map((perfil) => {
+      const lista = itens.filter((i) => i.perfil === perfil);
+      if (!lista.length) return "";
+      const fat = lista.reduce((s, i) => s + i.fat12m, 0);
+      const lucro = lista.reduce((s, i) => s + i.lucro12m, 0);
+      const pctFat = totalFat ? (fat / totalFat) * 100 : 0;
+      const pctLucro = totalLucro ? (lucro / totalLucro) * 100 : 0;
       return `
-        <div class="abc-card abc-card--${letra}">
-          <div class="abc-card__letter">Curva ${letra}</div>
-          <div class="abc-card__count">${lista.length} produto(s)</div>
-          <div class="abc-card__pct">${pct.toFixed(1)}%</div>
-          <div class="abc-card__pct-label">do faturamento (12M) · ${fmtMoney(soma)}</div>
+        <div class="abc-card abc-card--${perfil === "Estrela" ? "A" : perfil === "Análise" ? "C" : "B"}">
+          <div class="abc-card__letter">${perfil}</div>
+          <div class="abc-card__count">${lista.length} produto(s) · ${EXPLICA[perfil]}</div>
+          <div class="abc-card__pct">${pctLucro.toFixed(1)}%</div>
+          <div class="abc-card__pct-label">do lucro (12M) · ${fmtMoney(lucro)}<br>
+            ${pctFat.toFixed(1)}% do faturamento · ${fmtMoney(fat)}</div>
         </div>`;
     }).join("");
+
+    const linhas = itens.slice(0, 200).map((i) => `
+      <tr>
+        <td>${fmtFoto(i.foto)}</td>
+        <td>${fmtSkuLink(i.sku, i.link)}</td>
+        <td class="titulo-cell">${escapeHtml(i.titulo || "-")}</td>
+        <td>${badgePerfil_(i.perfil)}</td>
+        <td class="num">${badgeClasse_(i.classeFat)}</td>
+        <td class="num">${badgeClasse_(i.classeLucro)}</td>
+        <td class="num">${badgeClasse_(i.classeQtd)}</td>
+        <td class="num">${badgeClasse_(i.classeAtual)}</td>
+        <td class="num">${fmtMoney(i.fat12m)}</td>
+        <td class="num">${fmtMoney(i.lucro12m)}</td>
+        <td class="num">${fmtPct(i.margem)}</td>
+        <td class="num">${fmtNum(i.qtd30)}</td>
+        <td class="num">${fmtNum(i.estoque)}</td>
+        <td class="num">${i.diasEstoque === null ? "-" : fmtNum(i.diasEstoque)}</td>
+      </tr>`).join("");
+
+    el.innerHTML = `
+      ${cards}
+      <div style="grid-column:1/-1;margin-top:20px;">
+        <p class="muted" style="font-size:12px;margin-bottom:8px;">
+          Curva calculada sobre os últimos 12 meses de venda do Mercado Livre (as duas contas juntas,
+          por SKU). Corte de Pareto: A = primeiros 80% do total, B = até 95%, C = o resto.
+          "Giro atual" usa os últimos 30 dias. O perfil cruza as três curvas com a margem —
+          a mediana da casa hoje é ${fmtPct(medianaMargem_(itens))}, e é ela que separa Premium de Volume.
+        </p>
+        <div style="overflow:auto;">
+        <table class="data-table">
+          <thead><tr>
+            <th></th><th>SKU</th><th>Título</th><th>Perfil</th>
+            <th>Fat.</th><th>Lucro</th><th>Qtd</th><th>Giro atual</th>
+            <th>Faturamento 12M</th><th>Lucro 12M</th><th>Margem</th>
+            <th>Vendas 30d</th><th>Estoque</th><th>Dias de estoque</th>
+          </tr></thead>
+          <tbody>${linhas}</tbody>
+        </table>
+        </div>
+        ${itens.length > 200 ? `<p class="muted" style="font-size:12px;">Mostrando os 200 primeiros de ${itens.length}.</p>` : ""}
+      </div>`;
+  }
+
+  function badgeClasse_(c) {
+    if (!c) return `<span class="muted">-</span>`;
+    return `<span class="badge badge--${c === "A" ? "foco" : c === "B" ? "manutencao" : "despriorizado"}">${c}</span>`;
+  }
+
+  function badgePerfil_(p) {
+    const cls = p === "Estrela" ? "foco" : p === "Premium" ? "manutencao"
+              : p === "Volume" ? "baixo" : p === "Potencial" ? "despriorizado" : "ignorar";
+    return `<span class="badge badge--${cls}">${escapeHtml(p)}</span>`;
   }
 
   function renderRuptura() {
@@ -720,7 +914,7 @@
         // G de RAW_Estoque) e ninguém usava — era por isso que o site somava
         // no capital produto que a planilha já tinha excluído.
         inativo: !!raw.inativo,
-        estoque, estoqueWms: Number(raw.estoque_wms || 0),
+        estoque, reserva: Number(raw.reserva || 0),
         precoOriginal: Number(raw.preco_original || 0), precoAtual: Number(raw.preco_atual || 0),
         custo,
         qtdHoje: met.qtdHoje, qtdOntem: met.qtdOntem, qtd7: met.qtd7, qtd15: met.qtd15, qtd30: met.qtd30,
@@ -858,7 +1052,7 @@
         <td>${escapeHtml(p.categoria ?? "-")}</td>
         <td class="num">${fmtPrecoComPromo(p.precoOriginal, p.precoAtual)}</td>
         <td class="num">${fmtNum(p.estoque)}</td>
-        <td class="num">${fmtNum(p.estoqueWms)}</td>
+        <td class="num">${fmtNum(p.reserva)}</td>
         <td class="num">${fmtNum(p.qtdHoje)}</td>
         <td class="num">${fmtNum(p.qtdOntem)}</td>
         <td class="num">${fmtNum(p.qtd7)}</td>
@@ -1938,138 +2132,306 @@
     renderCapitalEmpresa_();
   }
 
-  // ===== CAPITAL EMPRESA =====
+  // ======================================================= CAPITAL DA EMPRESA
+  //
+  // Responde "o que tem rodando na empresa" em três pedaços que somam 100%:
+  //
+  //   ESTOQUE    peças paradas × custo — dinheiro em mercadoria
+  //   A RECEBER  venda aprovada que o Mercado Pago ainda não liberou
+  //   CAIXA      dinheiro disponível hoje nas contas
+  //
+  // Tudo vem das DUAS contas, sempre: dois Mercado Livre pro estoque, dois
+  // Mercado Pago pro a receber e pro caixa. Cada card mostra a quebra por
+  // conta, porque é assim que dá pra conferir — o app do Mercado Pago
+  // mostra uma conta por vez, então se comparar o total com um app só
+  // nunca vai bater.
+  //
+  // SOBRE FILTRAR POR PERÍODO — e por que existem dois modos.
+  //
+  // Capital é uma FOTO, não um filme. O estoque que você tem é o de agora;
+  // não existe em lugar nenhum o registro de quanto estoque você tinha em
+  // 12 de março. Um filtro que fingisse saber isso estaria inventando.
+  //
+  // Então: "Hoje" mostra a foto de verdade. Escolher um mês ou um dia
+  // troca pra visão de MOVIMENTO — quanto entrou no caixa, quanto está
+  // marcado pra liberar, e o resultado (faturamento e lucro) daquele
+  // período. Essas três coisas têm data e podem ser recortadas sem chute.
+  // O estoque continua aparecendo como está hoje, e vem marcado como tal.
+  //
+  // (O Capital.gs grava uma foto por dia na aba "Histórico Capital". Daqui
+  // uns meses dá pra comparar mês contra mês de verdade — mas só do dia em
+  // que ele começou a rodar pra frente. Não dá pra inventar o passado.)
 
-  // Capital parado = peça FÍSICA no depósito × custo.
+  function periodoCapital_() {
+    return state.capitalPeriodo || { modo: "hoje", valor: "" };
+  }
+
+  function dentroDoPeriodo_(dataIso, periodo) {
+    if (!dataIso) return false;
+    if (periodo.modo === "hoje") return true;
+    if (periodo.modo === "mes") return String(dataIso).slice(0, 7) === periodo.valor;
+    if (periodo.modo === "dia") return String(dataIso).slice(0, 10) === periodo.valor;
+    return true;
+  }
+
+  // ---- ESTOQUE: as duas contas do Mercado Livre
   //
-  // Aqui é por SKU, não por anúncio, e essa diferença é o que faz o número
-  // fechar. O mesmo SKU costuma estar anunciado nas duas contas, e o
-  // Mercado Livre reporta o estoque em CADA anúncio — somar as linhas por
-  // conta contava a mesma caixa duas vezes e inflava o capital.
-  //
-  // Fonte de verdade, em ordem: estoque do WMS (tabela `stock`, que é a
-  // contagem física de verdade: prateleira + caixas) e, se não houver WMS
-  // pra esse SKU, o maior estoque anunciado entre as contas — nunca a soma.
-  function calcularTotaisEstoque_() {
-    const porSku = new Map();
+  // Dentro da MESMA conta, o mesmo SKU em dois anúncios é o mesmo estoque —
+  // o ML repete o número em cada anúncio, e somar inflaria. Entre contas,
+  // soma: são CNPJs diferentes, com inventário separado no Mercado Livre.
+  function capitalEmEstoque_() {
+    const porContaSku = new Map();
     (state.linhasProdutosPorConta || []).forEach((p) => {
-      const custo = Number(p.custo || 0);
-      if (custo <= 0) return; // sem custo cadastrado não entra no capital
-      const wms = Number(p.estoqueWms || 0);
-      const anunciado = Number(p.estoque || 0);
-      const atual = porSku.get(p.sku) || { custo, wms: 0, anunciado: 0, ativoEmAlgumLugar: false };
-      atual.custo = custo;
-      atual.wms = Math.max(atual.wms, wms);
-      atual.anunciado = Math.max(atual.anunciado, anunciado);
-      // Só é descontinuado quem saiu do ar nas DUAS contas.
-      if (!p.inativo) atual.ativoEmAlgumLugar = true;
-      porSku.set(p.sku, atual);
+      const chave = p.conta + "|" + p.sku;
+      const a = porContaSku.get(chave) || { conta: p.conta, sku: p.sku, estoque: 0, custo: 0, ativo: false, titulo: p.titulo };
+      a.estoque = Math.max(a.estoque, Number(p.estoque || 0));
+      a.custo = Math.max(a.custo, Number(p.custo || 0));
+      if (!p.inativo) a.ativo = true;
+      porContaSku.set(chave, a);
     });
 
-    // Mesma regra da planilha, pra os dois lugares nunca discordarem:
-    // descontinuado que ainda tem peça no depósito continua sendo dinheiro
-    // seu (só que parado em coisa que não vende mais), e aparece separado.
-    // Descontinuado sem WMS fica de fora — o estoque do anúncio ficou
-    // congelado no dia em que ele saiu do ar e não dá pra conferir.
-    let total = 0, descontinuado = 0, comWms = 0, semWms = 0, skusDescontinuados = 0;
-    porSku.forEach((v) => {
-      if (v.ativoEmAlgumLugar) {
-        const unidades = v.wms > 0 ? v.wms : v.anunciado;
-        if (unidades <= 0) return;
-        if (v.wms > 0) comWms++; else semWms++;
-        total += unidades * v.custo;
-      } else if (v.wms > 0) {
-        skusDescontinuados++;
-        descontinuado += v.wms * v.custo;
+    let total = 0, ativo = 0, foraDoAr = 0, unidades = 0, anuncios = 0;
+    let conta1 = 0, conta2 = 0, semCusto = 0, unidadesSemCusto = 0;
+    const semCustoLista = [];
+
+    porContaSku.forEach((v) => {
+      if (v.estoque <= 0) return;
+      if (v.custo <= 0) {
+        semCusto++;
+        unidadesSemCusto += v.estoque;
+        semCustoLista.push(v);
+        return;
       }
+      const valor = v.estoque * v.custo;
+      total += valor;
+      unidades += v.estoque;
+      anuncios++;
+      if (v.conta === "1") conta1 += valor; else conta2 += valor;
+      if (v.ativo) ativo += valor; else foraDoAr += valor;
+    });
+
+    semCustoLista.sort((a, b) => b.estoque - a.estoque);
+    return { total, ativo, foraDoAr, unidades, anuncios, conta1, conta2, semCusto, unidadesSemCusto, semCustoLista };
+  }
+
+  // ---- A RECEBER: os dois Mercado Pago + lançamentos manuais
+  function capitalAReceber_(periodo) {
+    const automaticos = recebiveisAutomaticosML_();
+    const noPeriodo = periodo.modo === "hoje"
+      ? automaticos
+      : automaticos.filter((r) => dentroDoPeriodo_(r.vencimento, periodo));
+
+    const mp1 = noPeriodo.filter((r) => r.contaMp === "1").reduce((s, r) => s + Number(r.valor || 0), 0);
+    const mp2 = noPeriodo.filter((r) => r.contaMp === "2").reduce((s, r) => s + Number(r.valor || 0), 0);
+
+    const manuaisLista = (state.contas_receber || []).filter((c) => c.status === "A receber");
+    const manuais = (periodo.modo === "hoje" ? manuaisLista : manuaisLista.filter((c) => dentroDoPeriodo_(c.vencimento, periodo)))
+      .reduce((s, c) => s + Number(c.valor || 0), 0);
+
+    return { total: mp1 + mp2 + manuais, mp1, mp2, manuais, itens: noPeriodo.length };
+  }
+
+  // ---- CAIXA: os dois Mercado Pago
+  //
+  // O número que vale é o SALDO das contas (state.saldo_mp, que vem da aba
+  // "Saldo MP" da planilha). Sem ele, o que sobra é somar tudo que já foi
+  // liberado — e isso NÃO é saldo: é quanto dinheiro já passou pela conta
+  // na vida. Dinheiro liberado sai (fornecedor, transferência, saque), e a
+  // aba de movimentos só registra entrada. Quando cai nesse caso, o card
+  // avisa em vermelho em vez de fingir que está certo.
+  function capitalEmCaixa_(periodo) {
+    const liberados = movimentosMpCombinados_()
+      .filter((m) => m.status_liberacao === "released" && pagamentoAprovado_(m));
+
+    const entrouNoPeriodo = periodo.modo === "hoje" ? null
+      : liberados.filter((m) => dentroDoPeriodo_(m.data_liberacao || m.data, periodo))
+                 .reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
+
+    const real = Number(state.saldo_mp || 0);
+    if (real > 0) return { valor: real, real: true, entrouNoPeriodo };
+
+    const jaLiberado = liberados.reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
+    return { valor: jaLiberado, real: false, entrouNoPeriodo };
+  }
+
+  // ---- P&L do período: o que a operação produziu
+  function resultadoDoPeriodo_(periodo) {
+    const todas = (state.transacoes || []).concat(state.transacoes_2 || []);
+    const doPeriodo = periodo.modo === "hoje"
+      ? todas.filter((t) => (t.data || "") >= isoDate_(new Date(Date.now() - 29 * 86400000)))
+      : todas.filter((t) => dentroDoPeriodo_(t.data, periodo));
+
+    let faturamento = 0, lucro = 0, unidades = 0;
+    const pedidos = new Set();
+    doPeriodo.forEach((t) => {
+      faturamento += Number(t.faturamento || 0);
+      lucro += Number(t.lucro || 0);
+      unidades += Number(t.quantidade || 0);
+      if (t.pedido_id) pedidos.add(t.pedido_id);
     });
     return {
-      total: total + descontinuado, ativo: total, descontinuado,
-      skus: comWms + semWms, comWms, semWms, skusDescontinuados,
+      faturamento, lucro, unidades, pedidos: pedidos.size,
+      margem: faturamento > 0 ? lucro / faturamento : 0,
+      rotulo: periodo.modo === "hoje" ? "últimos 30 dias" : rotuloPeriodo_(periodo),
     };
   }
 
-  // A receber, quebrado por origem — é a MESMA fonte que a aba "A Receber"
-  // usa (recebiveisAutomaticosML_), então os dois lugares do site nunca
-  // mostram números diferentes. A quebra por conta existe porque o app do
-  // Mercado Pago mostra o "a liberar" de uma conta por vez: pra conferir,
-  // compare pedaço com pedaço, não o total com um app só.
-  function calcularTotalAReceber_() {
-    const automaticos = recebiveisAutomaticosML_();
-    const mlConta1 = automaticos.filter((r) => r.contaMp === "1").reduce((s, r) => s + Number(r.valor || 0), 0);
-    const mlConta2 = automaticos.filter((r) => r.contaMp === "2").reduce((s, r) => s + Number(r.valor || 0), 0);
-    const manuais = (state.contas_receber || [])
-      .filter((c) => c.status === "A receber")
-      .reduce((s, c) => s + Number(c.valor || 0), 0);
-    return { total: mlConta1 + mlConta2 + manuais, mlConta1, mlConta2, manuais };
+  function rotuloPeriodo_(p) {
+    if (p.modo === "mes") return fmtMesLabel_(p.valor + "-01");
+    if (p.modo === "dia") return p.valor.split("-").reverse().join("/");
+    return "hoje";
   }
 
-  // Saldo em caixa.
-  //
-  // ATENÇÃO ao que este número é: se a planilha já traz o saldo real das
-  // contas do Mercado Pago (state.saldo_mp), é ele que vale — é o que bate
-  // com o app. Se não traz, o que sobra é somar tudo que já foi liberado,
-  // e isso NÃO é saldo: é quanto dinheiro já passou pela conta desde
-  // sempre. Dinheiro liberado sai (fornecedor, transferência, saque), e a
-  // aba de movimentos só registra o que entrou. Nesse caso o número vem
-  // marcado, pra ninguém conferir contra o app e achar que está quebrado.
-  function calcularSaldoCaixa_() {
-    const real = Number(state.saldo_mp || 0);
-    if (real > 0) return { valor: real, real: true };
-
-    const jaLiberado = movimentosMpCombinados_()
-      .filter((m) => m.status_liberacao === "released" && pagamentoAprovado_(m))
-      .reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
-    return { valor: jaLiberado, real: false };
+  // Meses que existem de verdade nos dados — não uma lista fixa que
+  // ofereceria períodos vazios.
+  function mesesComDados_() {
+    const set = new Set();
+    (state.transacoes || []).concat(state.transacoes_2 || []).forEach((t) => {
+      if (t.data) set.add(String(t.data).slice(0, 7));
+    });
+    movimentosMpCombinados_().forEach((m) => {
+      const d = m.data_liberacao || m.data;
+      if (d) set.add(String(d).slice(0, 7));
+    });
+    return Array.from(set).sort().reverse();
   }
 
   function renderCapitalEmpresa_() {
-    const estoque = calcularTotaisEstoque_();
-    const capitalParado = estoque.total;
-    const aReceber = calcularTotalAReceber_();
-    const caixa = calcularSaldoCaixa_();
-    const saldoCaixa = caixa.valor;
+    const periodo = periodoCapital_();
+    const estoque = capitalEmEstoque_();
+    const aReceber = capitalAReceber_(periodo);
+    const caixa = capitalEmCaixa_(periodo);
+    const pl = resultadoDoPeriodo_(periodo);
 
-    const totalCapital = capitalParado + aReceber.total + saldoCaixa;
-    const pct = (v) => (totalCapital > 0 ? v / totalCapital : 0);
+    const total = estoque.total + aReceber.total + caixa.valor;
+    const pct = (v) => (total > 0 ? v / total : 0);
 
-    const container = document.getElementById("capitalEmpresaRow");
+    const container = garantirContainerCapital_();
     if (!container) return;
 
-    // Cada card mostra DE ONDE veio o número, pra dar pra conferir peça por
-    // peça: estoque contra o WMS, a receber e caixa contra o app do
-    // Mercado Pago (uma conta por vez, que é como o app mostra).
-    let fonteEstoque = estoque.semWms > 0
-      ? `${estoque.comWms} SKU(s) pelo WMS · ${estoque.semWms} sem WMS (usou estoque do anúncio)`
-      : `${estoque.comWms} SKU(s), estoque físico do WMS`;
-    if (estoque.descontinuado > 0) {
-      fonteEstoque += ` · ${fmtMoney(estoque.descontinuado)} em ${estoque.skusDescontinuados} descontinuado(s)`;
+    const meses = mesesComDados_();
+    const hojeIso = isoDate_(new Date());
+
+    const avisos = [];
+    if (!caixa.real) {
+      avisos.push(`O caixa <strong>não é o saldo de hoje</strong> — é a soma de tudo que já foi liberado desde sempre.
+        Preencha o saldo das duas contas na aba "Saldo MP" da planilha e rode <code>gerarCapitalEmpresa</code>.`);
+    }
+    if (estoque.semCusto > 0) {
+      avisos.push(`<strong>${estoque.semCusto} anúncio(s)</strong> com ${fmtNum(estoque.unidadesSemCusto)} unidades em estoque
+        estão fora desta conta por não terem custo cadastrado. Preencha na aba Custos — é o que mais falta pro número fechar.`);
+    }
+    if (periodo.modo !== "hoje") {
+      avisos.push(`Período selecionado: o estoque mostrado é o de <strong>hoje</strong> (não existe registro de
+        quanto estoque havia numa data passada). A receber, caixa e resultado são do período.`);
     }
 
     container.innerHTML = `
-      <div class="fin-kpi">
-        <span class="fin-kpi__value">${fmtMoney(capitalParado)}</span>
-        <span class="fin-kpi__label">Capital parado em estoque · ${fmtPct(pct(capitalParado))}</span>
-        <span class="muted" style="font-size:11px;">${fonteEstoque}</span>
+      <div class="capital-header" style="grid-column:1/-1;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px;">
+        <h2 style="margin:0;font-size:17px;font-weight:600;">Capital da empresa</h2>
+        <span class="muted" style="font-size:12px;">o que está rodando · duas contas ML + dois Mercado Pago</span>
+        <span style="flex:1;"></span>
+        <select id="capitalPeriodoModo" class="search-input" style="min-width:120px;">
+          <option value="hoje" ${periodo.modo === "hoje" ? "selected" : ""}>Foto de hoje</option>
+          <option value="mes"  ${periodo.modo === "mes"  ? "selected" : ""}>Por mês</option>
+          <option value="dia"  ${periodo.modo === "dia"  ? "selected" : ""}>Por dia</option>
+        </select>
+        ${periodo.modo === "mes" ? `
+          <select id="capitalPeriodoValor" class="search-input" style="min-width:150px;">
+            ${meses.map((m) => `<option value="${m}" ${m === periodo.valor ? "selected" : ""}>${fmtMesLabel_(m + "-01")}</option>`).join("")}
+          </select>` : ""}
+        ${periodo.modo === "dia" ? `
+          <input type="date" id="capitalPeriodoValor" class="search-input" value="${periodo.valor || hojeIso}" max="${hojeIso}">` : ""}
       </div>
+
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtMoney(estoque.total)}</span>
+        <span class="fin-kpi__label">Em estoque · ${fmtPct(pct(estoque.total))}</span>
+        <span class="muted" style="font-size:11px;">
+          ${fmtNum(estoque.unidades)} un em ${estoque.anuncios} anúncio(s)<br>
+          ↳ ML conta 1: ${fmtMoney(estoque.conta1)} · conta 2: ${fmtMoney(estoque.conta2)}
+          ${estoque.foraDoAr > 0 ? `<br>↳ ${fmtMoney(estoque.foraDoAr)} em anúncio fora do ar` : ""}
+        </span>
+      </div>
+
       <div class="fin-kpi fin-kpi--in">
         <span class="fin-kpi__value">${fmtMoney(aReceber.total)}</span>
-        <span class="fin-kpi__label">Total a receber · ${fmtPct(pct(aReceber.total))}</span>
-        <span class="muted" style="font-size:11px;">↳ ML conta 1: ${fmtMoney(aReceber.mlConta1)} · conta 2: ${fmtMoney(aReceber.mlConta2)} · manuais: ${fmtMoney(aReceber.manuais)}</span>
+        <span class="fin-kpi__label">A receber · ${fmtPct(pct(aReceber.total))}</span>
+        <span class="muted" style="font-size:11px;">
+          ${periodo.modo === "hoje" ? "tudo que ainda não liberou" : "libera em " + rotuloPeriodo_(periodo)}<br>
+          ↳ MP conta 1: ${fmtMoney(aReceber.mp1)} · conta 2: ${fmtMoney(aReceber.mp2)}
+          ${aReceber.manuais > 0 ? `<br>↳ manuais: ${fmtMoney(aReceber.manuais)}` : ""}
+        </span>
       </div>
-      <div class="fin-kpi fin-kpi--in">
-        <span class="fin-kpi__value">${fmtMoney(saldoCaixa)}</span>
-        <span class="fin-kpi__label">Saldo em caixa · ${fmtPct(pct(saldoCaixa))}</span>
-        <span class="muted" style="font-size:11px;">${caixa.real
-          ? "saldo real das 2 contas do Mercado Pago"
-          : "⚠ soma de tudo já liberado — não é o saldo de hoje"}</span>
+
+      <div class="fin-kpi ${caixa.real ? "fin-kpi--in" : "fin-kpi--out"}">
+        <span class="fin-kpi__value">${fmtMoney(caixa.valor)}</span>
+        <span class="fin-kpi__label">Em caixa · ${fmtPct(pct(caixa.valor))}</span>
+        <span class="muted" style="font-size:11px;">
+          ${caixa.real ? "saldo das 2 contas do Mercado Pago" : "⚠ não é o saldo de hoje"}
+          ${caixa.entrouNoPeriodo !== null ? `<br>↳ entrou em ${rotuloPeriodo_(periodo)}: ${fmtMoney(caixa.entrouNoPeriodo)}` : ""}
+        </span>
       </div>
+
       <div class="fin-kpi fin-kpi--profit">
-        <span class="fin-kpi__value">${fmtMoney(totalCapital)}</span>
-        <span class="fin-kpi__label">Capital total da empresa · 100%</span>
+        <span class="fin-kpi__value">${fmtMoney(total)}</span>
+        <span class="fin-kpi__label">Capital total · 100%</span>
         <span class="muted" style="font-size:11px;">estoque + a receber + caixa</span>
       </div>
+
+      <div style="grid-column:1/-1;display:flex;gap:24px;flex-wrap:wrap;padding:12px 16px;margin-top:4px;
+                  background:rgba(255,255,255,0.03);border-radius:10px;">
+        <div><span class="muted" style="font-size:11px;">Resultado · ${pl.rotulo}</span></div>
+        <div><strong>${fmtMoney(pl.faturamento)}</strong> <span class="muted" style="font-size:11px;">faturamento</span></div>
+        <div><strong>${fmtMoney(pl.lucro)}</strong> <span class="muted" style="font-size:11px;">lucro</span></div>
+        <div><strong>${fmtPct(pl.margem)}</strong> <span class="muted" style="font-size:11px;">margem</span></div>
+        <div><strong>${fmtNum(pl.pedidos)}</strong> <span class="muted" style="font-size:11px;">pedidos</span></div>
+        <div><strong>${fmtNum(pl.unidades)}</strong> <span class="muted" style="font-size:11px;">unidades</span></div>
+      </div>
+
+      ${avisos.length ? `
+        <div style="grid-column:1/-1;padding:10px 16px;border-radius:10px;
+                    background:rgba(255,107,157,0.08);border:1px solid rgba(255,107,157,0.25);font-size:12px;line-height:1.6;">
+          ${avisos.map((a) => `<div>• ${a}</div>`).join("")}
+        </div>` : ""}
     `;
+
+    const selModo = document.getElementById("capitalPeriodoModo");
+    if (selModo) {
+      selModo.addEventListener("change", () => {
+        const modo = selModo.value;
+        const meses2 = mesesComDados_();
+        state.capitalPeriodo = {
+          modo,
+          valor: modo === "mes" ? (meses2[0] || hojeIso.slice(0, 7)) : modo === "dia" ? hojeIso : "",
+        };
+        renderCapitalEmpresa_();
+      });
+    }
+    const selValor = document.getElementById("capitalPeriodoValor");
+    if (selValor) {
+      selValor.addEventListener("change", () => {
+        state.capitalPeriodo = { modo: periodo.modo, valor: selValor.value };
+        renderCapitalEmpresa_();
+      });
+    }
+  }
+
+  // Se o HTML não tiver o container, cria um logo abaixo das métricas do
+  // topo. Assim o card aparece sem precisar editar o index.html.
+  function garantirContainerCapital_() {
+    let el = document.getElementById("capitalEmpresaRow");
+    if (el) return el;
+
+    const ancora = document.getElementById("metricasChaveHoje") || document.getElementById("dashboard");
+    if (!ancora) return null;
+
+    el = document.createElement("div");
+    el.id = "capitalEmpresaRow";
+    el.className = "fin-kpi-row";
+    el.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin:24px 0 8px;";
+    ancora.parentNode.insertBefore(el, ancora.nextSibling);
+    return el;
   }
 
   function renderMetricasChaveHoje_(totais) {
