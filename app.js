@@ -118,7 +118,8 @@
       state.saida_diaria = data.saida_diaria || [];
       state.saida_mensal = data.saida_mensal || [];
       state.financeiro_diario = data.financeiro_diario || [];
-      state.financeiro_mensal = data.financeiro_mensal || [];      state.curva_abc = data.curva_abc || [];
+      state.financeiro_mensal = data.financeiro_mensal || [];
+      state.curva_abc = data.curva_abc || [];
       state.transacoes = data.transacoes || [];
       state.transacoes_2 = data.transacoes_2 || [];
       state.devolucoes = data.devolucoes || [];
@@ -381,10 +382,38 @@
       </tr>`).join("");
   }
 
+  // Percentual do preço de venda que NÃO fica com a gente: comissão do
+  // Mercado Livre + frete. É a média real da casa (12 meses, todos os SKUs),
+  // usada como referência pra produto que ainda não vendeu e por isso não
+  // tem histórico próprio. Não inclui o custo do produto — o custo entra
+  // separado, senão seria contado duas vezes.
+  function taxaFreteMediaGeral_() {
+    let fat = 0, taxa = 0, frete = 0;
+    (state.linhasProdutosPorConta || []).forEach((p) => {
+      fat += Number(p.fat12m || 0);
+      taxa += Number(p.taxa12m || 0);
+      frete += Number(p.frete12m || 0);
+    });
+    if (fat <= 0) return 0.18; // sem histórico nenhum: ~18%, ordem de grandeza do ML
+    return Math.min(Math.max((taxa + frete) / fat, 0), 0.95);
+  }
+
+  // Quanto por cento do preço some em taxa + frete PARA ESTE ANÚNCIO, com
+  // base nas vendas reais dele nos últimos 12 meses. Se ele nunca vendeu,
+  // cai na média da casa.
+  function taxaFreteDoProduto_(p, mediaGeral) {
+    const fat = Number(p.fat12m || 0);
+    if (fat <= 0) return mediaGeral;
+    const r = (Number(p.taxa12m || 0) + Number(p.frete12m || 0)) / fat;
+    if (!isFinite(r) || r < 0) return mediaGeral;
+    return Math.min(r, 0.95);
+  }
+
   function renderEstoque() {
     const somenteSemCusto = document.getElementById("semCustoFiltro").checked;
     const apenasComEstoque = document.getElementById("apenasComEstoqueFiltro").checked;
     let totalParado = 0, totalPotencial = 0, totalLucroPotencial = 0;
+    const taxaFreteMedia = taxaFreteMediaGeral_();
     // Usa as linhas POR CONTA (mesmas da "Lista completa de produtos") —
     // se o mesmo SKU existir nas duas contas, cada uma aparece com seu
     // próprio estoque/preço/custo, sem somar uma na outra. Antes, usar o
@@ -395,16 +424,31 @@
       const custo = p.custo;
       const preco = p.precoAtual;
       const precoOriginal = p.precoOriginal;
-      // Margem sempre coerente entre o preço de venda ATUAL e o custo ATUAL
-      // do produto (não a margem histórica de vendas, que pode ficar
-      // distorcida em produto com pouco histórico) — e por já vir do preço
-      // que o Mercado Livre está cobrando de fato agora, já reflete
-      // automaticamente qualquer promoção ativa.
-      //   Lucro potencial = Valor de venda potencial × Margem atual
-      const margem = preco > 0 ? (preco - custo) / preco : 0;
+      // LUCRO REAL: o que sobra no bolso vendendo HOJE, no preço de hoje.
+      //
+      // Regra da casa (RAW_Vendas): Lucro = Faturamento − Custo − Taxa ML −
+      // Frete. Ou seja, o "lucro" do histórico JÁ está líquido de custo.
+      // Por isso aqui a gente usa só a fatia de taxa+frete do histórico e
+      // desconta o custo UMA vez, com o custo de hoje:
+      //
+      //   recebido por unidade = preço − (preço × taxa+frete%)
+      //   lucro por unidade     = recebido − custo
+      //
+      // A % de taxa+frete vem das vendas reais DESTE anúncio nos últimos 12
+      // meses (então já embute comissão, frete grátis, tipo de anúncio); se
+      // ele nunca vendeu, usa a média real da casa.
+      const taxaFrete = taxaFreteDoProduto_(p, taxaFreteMedia);
+      const recebidoPorUnidade = preco * (1 - taxaFrete);
+      const lucroPorUnidade = recebidoPorUnidade - custo;
+      // Margem mostrada na tabela = margem líquida de verdade sobre o preço.
+      const margemReal = preco > 0 ? lucroPorUnidade / preco : 0;
+
       const valorParado = estoque * custo;
       const valorPotencial = estoque * preco;
-      const lucroPotencial = valorPotencial * margem;
+      // Sem Math.max(0, ...): se o produto dá prejuízo no preço atual, o
+      // número tem que aparecer negativo. Esconder isso é justamente o que
+      // fazia a conta parecer boa quando não era.
+      const lucroPotencial = estoque * lucroPorUnidade;
       // Os 3 indicadores do topo SEMPRE consideram só quem tem estoque de
       // verdade (> 0) E custo preenchido (> 0) — produto sem custo
       // cadastrado normalmente é um anúncio ainda não revisado/cadastrado
@@ -419,7 +463,8 @@
       }
       return {
         sku: p.sku, conta: p.conta, titulo: p.titulo, foto: p.foto, link: p.link,
-        estoque, custo, valorParado, preco, precoOriginal, margem, lucroPotencial,
+        estoque, custo, valorParado, preco, precoOriginal, margem: margemReal, lucroPotencial,
+        taxaFrete, recebidoPorUnidade, semHistorico: !(Number(p.fat12m) > 0),
       };
     }).sort((a, b) => b.valorParado - a.valorParado);
 
@@ -432,9 +477,9 @@
         <span class="fin-kpi__value">${fmtMoney(totalPotencial)}</span>
         <span class="fin-kpi__label">Valor de venda potencial <span class="muted">— só com custo preenchido</span></span>
       </div>
-      <div class="fin-kpi fin-kpi--profit">
+      <div class="fin-kpi ${totalLucroPotencial < 0 ? "fin-kpi--out" : "fin-kpi--profit"}">
         <span class="fin-kpi__value">${fmtMoney(totalLucroPotencial)}</span>
-        <span class="fin-kpi__label">Lucro potencial (na margem atual) <span class="muted">— só com custo preenchido</span></span>
+        <span class="fin-kpi__label">Lucro líquido do estoque <span class="muted">— já sem comissão ML e frete, no preço de hoje</span></span>
       </div>`;
 
     // Por padrão, a lista já exclui quem não tem custo preenchido (mesma
@@ -631,6 +676,15 @@
         qtdPrev30: somaDesde(60, "quantidade") - somaDesde(30, "quantidade"),
         fat12m: somaDesde(365, "faturamento"),
         lucro12m: somaDesde(365, "lucro"),
+        // Componentes do lucro separados. Precisamos deles separados porque
+        // "lucro" na RAW_Vendas já vem LÍQUIDO DE CUSTO
+        // (Lucro = Faturamento − Custo − Taxa ML − Frete). Pra projetar o
+        // lucro do estoque parado a gente precisa da parte que NÃO é custo
+        // (taxa + frete), senão o custo entra na conta duas vezes.
+        custo12m: somaDesde(365, "custo"),
+        taxa12m: somaDesde(365, "taxa_ml"),
+        frete12m: somaDesde(365, "frete"),
+        qtd12m: somaDesde(365, "quantidade"),
         ultimaVenda: datas.length ? datas[datas.length - 1] : null,
       };
     }
@@ -662,6 +716,10 @@
       return {
         sku, conta, fornecedor: raw.fornecedor, categoria: raw.categoria, foto: raw.foto, link: raw.link,
         titulo: raw.titulo || "",
+        // Anúncio que saiu do ar. O WebApp.gs já mandava esse campo (coluna
+        // G de RAW_Estoque) e ninguém usava — era por isso que o site somava
+        // no capital produto que a planilha já tinha excluído.
+        inativo: !!raw.inativo,
         estoque, estoqueWms: Number(raw.estoque_wms || 0),
         precoOriginal: Number(raw.preco_original || 0), precoAtual: Number(raw.preco_atual || 0),
         custo,
@@ -673,6 +731,7 @@
         ultimaVenda: met.ultimaVenda,
         ultimaVendaOrdenacao: met.ultimaVenda ? new Date(met.ultimaVenda).getTime() : -1,
         fat12m: met.fat12m, lucro12m: met.lucro12m,
+        custo12m: met.custo12m, taxa12m: met.taxa12m, frete12m: met.frete12m, qtd12m: met.qtd12m,
         margem: met.fat12m ? met.lucro12m / met.fat12m : 0,
         situacao: sit, situacaoOrdenacao: sit.texto,
         diasRuptura,
@@ -1345,6 +1404,38 @@
     return (state.movimentos_mp || []).concat(state.movimentos_mp_2 || []);
   }
 
+  // ---- filtros de status do Mercado Pago -------------------------------
+  // O que faz um pagamento contar como DINHEIRO DE VERDADE é o status do
+  // PAGAMENTO ser "approved". Reembolsado (refunded), cancelado
+  // (cancelled), chargeback (charged_back) e recusado (rejected) são
+  // dinheiro que não vai entrar (ou que entrou e já saiu de volta pro
+  // comprador) — e o detalhe traiçoeiro: um pagamento assim NUNCA chega a
+  // ser "released", então o status de liberação dele fica "pending" (ou em
+  // branco) pra sempre. Antes, o site só olhava o status de LIBERAÇÃO —
+  // era exatamente isso que fazia o "Total a receber" ficar MAIOR que o
+  // valor real do app do Mercado Pago (pagamentos devolvidos somando como
+  // "a receber" eternamente) e deixava até pagamento recusado contar como
+  // entrada no Caixa.
+  function pagamentoAprovado_(m) {
+    return String(m.status || "").toLowerCase() === "approved";
+  }
+
+  // Valor que conta de verdade: o LÍQUIDO (já sem a comissão do ML — é o
+  // que bate com o app do Mercado Pago), menos a parte proporcional de
+  // qualquer reembolso PARCIAL (pagamento parcialmente reembolsado continua
+  // "approved", mas parte do dinheiro voltou pro comprador). Reembolso
+  // total nem chega aqui — o status vira "refunded" e o pagamento é
+  // excluído pelo pagamentoAprovado_ acima.
+  function valorLiquidoEfetivo_(m) {
+    const base = Number(m.valor_liquido || m.valor || 0);
+    const bruto = Number(m.valor || 0);
+    const reembolsado = Number(m.valor_reembolsado || 0);
+    if (reembolsado > 0 && bruto > 0) {
+      return Math.max(0, base * (1 - Math.min(reembolsado / bruto, 1)));
+    }
+    return base;
+  }
+
   function mesesDisponiveisCaixa_() {
     const set = new Set();
     movimentosMpCombinados_().forEach((m) => {
@@ -1406,7 +1497,7 @@
     const grupos = {};
     linhas.forEach((m) => {
       const chave = m.origem === "Mercado Livre" ? "Mercado Livre" : fmtMetodoPagamento_(m.metodo_pagamento);
-      grupos[chave] = (grupos[chave] || 0) + Number(m.valor_liquido || m.valor || 0);
+      grupos[chave] = (grupos[chave] || 0) + valorLiquidoEfetivo_(m);
     });
     const total = Object.values(grupos).reduce((s, v) => s + v, 0);
     const ordenado = Object.entries(grupos).sort((a, b) => b[1] - a[1]);
@@ -1430,9 +1521,10 @@
   // retendo (normalmente libera uns dias depois da venda). Isso evita a
   // confusão de olhar o total e achar que já tem tudo isso na mão.
   function renderMercadoLivreDisponivel_(yyyyMM) {
-    const doMes = movimentosMpCombinados_().filter((m) => (m.data || "").slice(0, 7) === yyyyMM && m.origem === "Mercado Livre");
-    const disponivel = doMes.filter((m) => m.status_liberacao === "released").reduce((s, m) => s + Number(m.valor_liquido || m.valor || 0), 0);
-    const aLiberar = doMes.filter((m) => m.status_liberacao === "pending").reduce((s, m) => s + Number(m.valor_liquido || m.valor || 0), 0);
+    const doMes = movimentosMpCombinados_()
+      .filter((m) => (m.data || "").slice(0, 7) === yyyyMM && m.origem === "Mercado Livre" && pagamentoAprovado_(m));
+    const disponivel = doMes.filter((m) => m.status_liberacao === "released").reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
+    const aLiberar = doMes.filter((m) => m.status_liberacao === "pending").reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
     const total = disponivel + aLiberar;
 
     document.getElementById("caixaMlRow").innerHTML = `
@@ -1462,7 +1554,12 @@
     // contar aqui automaticamente, sem precisar mover nada na mão.
     // O mês considerado é o da LIBERAÇÃO (quando o dinheiro realmente
     // entrou no caixa), não o da venda — pra bater com "o que já entrou".
+    // E só pagamento APROVADO conta: antes, um pagamento recusado ou
+    // cancelado (que tem status de liberação em branco, não "pending")
+    // passava pelo filtro e somava como entrada — dinheiro que nunca
+    // existiu inflando o caixa.
     let linhas = movimentosMpCombinados_().filter((m) => {
+      if (!pagamentoAprovado_(m)) return false;
       if (m.status_liberacao === "pending") return false;
       const mesEfetivo = (m.data_liberacao || m.data || "").slice(0, 7);
       return mesEfetivo === yyyyMM;
@@ -1470,8 +1567,8 @@
     if (state.caixaOrigem !== "todas") linhas = linhas.filter((m) => m.origem === state.caixaOrigem);
     linhas = linhas.slice().sort((a, b) => (a.data < b.data ? 1 : -1));
 
-    const totalEntradas = linhas.reduce((s, m) => s + Number(m.valor_liquido || m.valor || 0), 0);
-    const totalMarketplace = linhas.filter((m) => m.origem === "Mercado Livre").reduce((s, m) => s + Number(m.valor_liquido || m.valor || 0), 0);
+    const totalEntradas = linhas.reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
+    const totalMarketplace = linhas.filter((m) => m.origem === "Mercado Livre").reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
     const totalOutras = totalEntradas - totalMarketplace;
     const naoCategorizados = linhas.filter((m) => !m.categoria).length;
 
@@ -1652,18 +1749,25 @@
   // foi liberado — aparecem aqui automaticamente (não precisa cadastrar
   // nada), e desaparecem sozinhas quando o Mercado Livre libera (o status
   // muda, e nessa hora elas passam a contar no Caixa, não mais aqui).
+  //
+  // Só entra pagamento APROVADO: um pagamento reembolsado, cancelado ou
+  // com chargeback nunca chega a ser "released" (o status de liberação
+  // dele fica "pending" pra sempre) — antes, esses somavam no "Total a
+  // receber" eternamente, e era por isso que o site mostrava um valor
+  // MAIOR que o "a liberar" real do app do Mercado Pago.
   function recebiveisAutomaticosML_() {
     return movimentosMpCombinados_()
-      .filter((m) => m.origem === "Mercado Livre" && m.status_liberacao === "pending")
+      .filter((m) => m.origem === "Mercado Livre" && m.status_liberacao === "pending" && pagamentoAprovado_(m))
       .map((m) => ({
         id: "ml_" + m.pagamento_id,
         descricao: m.descricao || "Venda Mercado Livre",
         cliente: "Mercado Livre (conta " + m.contaMp + ")",
         categoria: "Receita Marketplace",
-        valor: m.valor_liquido || m.valor,
+        valor: valorLiquidoEfetivo_(m),
         vencimento: m.data_liberacao || m.data || "",
         status: "A receber",
         automatico: true,
+        contaMp: m.contaMp,
       }));
   }
 
@@ -1681,10 +1785,19 @@
     const recebidoNoMes = contas.filter((c) => c.status === "Recebido" && (c.data_recebimento || "").slice(0, 7) === hojeIso.slice(0, 7))
       .reduce((s, c) => s + Number(c.valor || 0), 0);
 
+    // Quebra do total, pra dar pra CONFERIR com o app do Mercado Pago:
+    // o app mostra o "a liberar" de UMA conta por vez, só do Mercado
+    // Livre, sem as contas manuais — então compare cada pedaço com o app
+    // da conta correspondente, não o total com um app só.
+    const mlConta1 = pendentes.filter((c) => c.automatico && c.contaMp === "1").reduce((s, c) => s + Number(c.valor || 0), 0);
+    const mlConta2 = pendentes.filter((c) => c.automatico && c.contaMp === "2").reduce((s, c) => s + Number(c.valor || 0), 0);
+    const manuais = pendentes.filter((c) => !c.automatico).reduce((s, c) => s + Number(c.valor || 0), 0);
+
     document.getElementById("areceberKpiRow").innerHTML = `
       <div class="fin-kpi fin-kpi--in">
         <span class="fin-kpi__value">${fmtMoney(totalPendente)}</span>
         <span class="fin-kpi__label">Total a receber</span>
+        <span class="muted" style="font-size:11px;">↳ ML conta 1: ${fmtMoney(mlConta1)} · ML conta 2: ${fmtMoney(mlConta2)} · manuais: ${fmtMoney(manuais)}</span>
       </div>
       <div class="fin-kpi">
         <span class="fin-kpi__value">${fmtMoney(previsto7)}</span>
@@ -1822,6 +1935,141 @@
     renderMetricasChaveHoje_(totais);
     renderTendenciaHoraria_();
     renderMaisVendidosHoje_(hoje);
+    renderCapitalEmpresa_();
+  }
+
+  // ===== CAPITAL EMPRESA =====
+
+  // Capital parado = peça FÍSICA no depósito × custo.
+  //
+  // Aqui é por SKU, não por anúncio, e essa diferença é o que faz o número
+  // fechar. O mesmo SKU costuma estar anunciado nas duas contas, e o
+  // Mercado Livre reporta o estoque em CADA anúncio — somar as linhas por
+  // conta contava a mesma caixa duas vezes e inflava o capital.
+  //
+  // Fonte de verdade, em ordem: estoque do WMS (tabela `stock`, que é a
+  // contagem física de verdade: prateleira + caixas) e, se não houver WMS
+  // pra esse SKU, o maior estoque anunciado entre as contas — nunca a soma.
+  function calcularTotaisEstoque_() {
+    const porSku = new Map();
+    (state.linhasProdutosPorConta || []).forEach((p) => {
+      const custo = Number(p.custo || 0);
+      if (custo <= 0) return; // sem custo cadastrado não entra no capital
+      const wms = Number(p.estoqueWms || 0);
+      const anunciado = Number(p.estoque || 0);
+      const atual = porSku.get(p.sku) || { custo, wms: 0, anunciado: 0, ativoEmAlgumLugar: false };
+      atual.custo = custo;
+      atual.wms = Math.max(atual.wms, wms);
+      atual.anunciado = Math.max(atual.anunciado, anunciado);
+      // Só é descontinuado quem saiu do ar nas DUAS contas.
+      if (!p.inativo) atual.ativoEmAlgumLugar = true;
+      porSku.set(p.sku, atual);
+    });
+
+    // Mesma regra da planilha, pra os dois lugares nunca discordarem:
+    // descontinuado que ainda tem peça no depósito continua sendo dinheiro
+    // seu (só que parado em coisa que não vende mais), e aparece separado.
+    // Descontinuado sem WMS fica de fora — o estoque do anúncio ficou
+    // congelado no dia em que ele saiu do ar e não dá pra conferir.
+    let total = 0, descontinuado = 0, comWms = 0, semWms = 0, skusDescontinuados = 0;
+    porSku.forEach((v) => {
+      if (v.ativoEmAlgumLugar) {
+        const unidades = v.wms > 0 ? v.wms : v.anunciado;
+        if (unidades <= 0) return;
+        if (v.wms > 0) comWms++; else semWms++;
+        total += unidades * v.custo;
+      } else if (v.wms > 0) {
+        skusDescontinuados++;
+        descontinuado += v.wms * v.custo;
+      }
+    });
+    return {
+      total: total + descontinuado, ativo: total, descontinuado,
+      skus: comWms + semWms, comWms, semWms, skusDescontinuados,
+    };
+  }
+
+  // A receber, quebrado por origem — é a MESMA fonte que a aba "A Receber"
+  // usa (recebiveisAutomaticosML_), então os dois lugares do site nunca
+  // mostram números diferentes. A quebra por conta existe porque o app do
+  // Mercado Pago mostra o "a liberar" de uma conta por vez: pra conferir,
+  // compare pedaço com pedaço, não o total com um app só.
+  function calcularTotalAReceber_() {
+    const automaticos = recebiveisAutomaticosML_();
+    const mlConta1 = automaticos.filter((r) => r.contaMp === "1").reduce((s, r) => s + Number(r.valor || 0), 0);
+    const mlConta2 = automaticos.filter((r) => r.contaMp === "2").reduce((s, r) => s + Number(r.valor || 0), 0);
+    const manuais = (state.contas_receber || [])
+      .filter((c) => c.status === "A receber")
+      .reduce((s, c) => s + Number(c.valor || 0), 0);
+    return { total: mlConta1 + mlConta2 + manuais, mlConta1, mlConta2, manuais };
+  }
+
+  // Saldo em caixa.
+  //
+  // ATENÇÃO ao que este número é: se a planilha já traz o saldo real das
+  // contas do Mercado Pago (state.saldo_mp), é ele que vale — é o que bate
+  // com o app. Se não traz, o que sobra é somar tudo que já foi liberado,
+  // e isso NÃO é saldo: é quanto dinheiro já passou pela conta desde
+  // sempre. Dinheiro liberado sai (fornecedor, transferência, saque), e a
+  // aba de movimentos só registra o que entrou. Nesse caso o número vem
+  // marcado, pra ninguém conferir contra o app e achar que está quebrado.
+  function calcularSaldoCaixa_() {
+    const real = Number(state.saldo_mp || 0);
+    if (real > 0) return { valor: real, real: true };
+
+    const jaLiberado = movimentosMpCombinados_()
+      .filter((m) => m.status_liberacao === "released" && pagamentoAprovado_(m))
+      .reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
+    return { valor: jaLiberado, real: false };
+  }
+
+  function renderCapitalEmpresa_() {
+    const estoque = calcularTotaisEstoque_();
+    const capitalParado = estoque.total;
+    const aReceber = calcularTotalAReceber_();
+    const caixa = calcularSaldoCaixa_();
+    const saldoCaixa = caixa.valor;
+
+    const totalCapital = capitalParado + aReceber.total + saldoCaixa;
+    const pct = (v) => (totalCapital > 0 ? v / totalCapital : 0);
+
+    const container = document.getElementById("capitalEmpresaRow");
+    if (!container) return;
+
+    // Cada card mostra DE ONDE veio o número, pra dar pra conferir peça por
+    // peça: estoque contra o WMS, a receber e caixa contra o app do
+    // Mercado Pago (uma conta por vez, que é como o app mostra).
+    let fonteEstoque = estoque.semWms > 0
+      ? `${estoque.comWms} SKU(s) pelo WMS · ${estoque.semWms} sem WMS (usou estoque do anúncio)`
+      : `${estoque.comWms} SKU(s), estoque físico do WMS`;
+    if (estoque.descontinuado > 0) {
+      fonteEstoque += ` · ${fmtMoney(estoque.descontinuado)} em ${estoque.skusDescontinuados} descontinuado(s)`;
+    }
+
+    container.innerHTML = `
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">${fmtMoney(capitalParado)}</span>
+        <span class="fin-kpi__label">Capital parado em estoque · ${fmtPct(pct(capitalParado))}</span>
+        <span class="muted" style="font-size:11px;">${fonteEstoque}</span>
+      </div>
+      <div class="fin-kpi fin-kpi--in">
+        <span class="fin-kpi__value">${fmtMoney(aReceber.total)}</span>
+        <span class="fin-kpi__label">Total a receber · ${fmtPct(pct(aReceber.total))}</span>
+        <span class="muted" style="font-size:11px;">↳ ML conta 1: ${fmtMoney(aReceber.mlConta1)} · conta 2: ${fmtMoney(aReceber.mlConta2)} · manuais: ${fmtMoney(aReceber.manuais)}</span>
+      </div>
+      <div class="fin-kpi fin-kpi--in">
+        <span class="fin-kpi__value">${fmtMoney(saldoCaixa)}</span>
+        <span class="fin-kpi__label">Saldo em caixa · ${fmtPct(pct(saldoCaixa))}</span>
+        <span class="muted" style="font-size:11px;">${caixa.real
+          ? "saldo real das 2 contas do Mercado Pago"
+          : "⚠ soma de tudo já liberado — não é o saldo de hoje"}</span>
+      </div>
+      <div class="fin-kpi fin-kpi--profit">
+        <span class="fin-kpi__value">${fmtMoney(totalCapital)}</span>
+        <span class="fin-kpi__label">Capital total da empresa · 100%</span>
+        <span class="muted" style="font-size:11px;">estoque + a receber + caixa</span>
+      </div>
+    `;
   }
 
   function renderMetricasChaveHoje_(totais) {
