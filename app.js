@@ -2130,306 +2130,601 @@
     renderTendenciaHoraria_();
     renderMaisVendidosHoje_(hoje);
     renderCapitalEmpresa_();
+    renderDre_();
   }
 
-  // ======================================================= CAPITAL DA EMPRESA
+  // ==================================================== POSIÇÃO FINANCEIRA
   //
-  // Responde "o que tem rodando na empresa" em três pedaços que somam 100%:
+  // Três telas separadas, de propósito, porque respondem perguntas
+  // diferentes e misturá-las é o jeito clássico de somar a mesma coisa
+  // duas vezes:
   //
-  //   ESTOQUE    peças paradas × custo — dinheiro em mercadoria
-  //   A RECEBER  venda aprovada que o Mercado Pago ainda não liberou
-  //   CAIXA      dinheiro disponível hoje nas contas
+  //   POSIÇÃO FINANCEIRA  "quanto temos?"      — foto patrimonial de hoje
+  //   DRE / P&L           "quanto ganhamos?"   — resultado de um período
+  //   FLUXO DE CAIXA      "quanto entrou/saiu?"— movimento de um período
   //
-  // Tudo vem das DUAS contas, sempre: dois Mercado Livre pro estoque, dois
-  // Mercado Pago pro a receber e pro caixa. Cada card mostra a quebra por
-  // conta, porque é assim que dá pra conferir — o app do Mercado Pago
-  // mostra uma conta por vez, então se comparar o total com um app só
-  // nunca vai bater.
+  // Esta parte é a POSIÇÃO. Ela não soma faturamento nem lucro: aqueles
+  // são de outra tela.
   //
-  // SOBRE FILTRAR POR PERÍODO — e por que existem dois modos.
+  // ---------------------------------------------------------------------
+  // A REGRA QUE EVITA CONTAR DUAS VEZES
   //
-  // Capital é uma FOTO, não um filme. O estoque que você tem é o de agora;
-  // não existe em lugar nenhum o registro de quanto estoque você tinha em
-  // 12 de março. Um filtro que fingisse saber isso estaria inventando.
+  // Uma venda no Mercado Livre percorre este caminho:
   //
-  // Então: "Hoje" mostra a foto de verdade. Escolher um mês ou um dia
-  // troca pra visão de MOVIMENTO — quanto entrou no caixa, quanto está
-  // marcado pra liberar, e o resultado (faturamento e lucro) daquele
-  // período. Essas três coisas têm data e podem ser recortadas sem chute.
-  // O estoque continua aparecendo como está hoje, e vem marcado como tal.
+  //   venda no ML → a receber (pending no MP) → liberado → saldo no MP
   //
-  // (O Capital.gs grava uma foto por dia na aba "Histórico Capital". Daqui
-  // uns meses dá pra comparar mês contra mês de verdade — mas só do dia em
-  // que ele começou a rodar pra frente. Não dá pra inventar o passado.)
+  // É o MESMO dinheiro mudando de estado, não três valores. Por isso:
+  //
+  //   DISPONÍVEL  = só o SALDO das contas do Mercado Pago
+  //   A RECEBER   = só o que está "pending" no Mercado Pago
+  //   nunca       = venda do Mercado Livre (ela já está num dos dois acima)
+  //
+  // Venda do ML entra na DRE, como resultado. Nunca na posição.
+  //
+  // ---------------------------------------------------------------------
+  // DADO NÃO DISPONÍVEL ≠ R$ 0
+  //
+  // Zero quer dizer "não existe valor". Não disponível quer dizer "a
+  // integração não entregou". São coisas diferentes e o painel nunca deve
+  // confundir as duas — um zero inventado é pior que um buraco visível.
+  //
+  // Por isso todo componente carrega { valor, disponivel, origem, quando }.
+  // Quando disponivel = false, a tela mostra o aviso, e o total que
+  // depende dele também fica marcado como incompleto.
 
-  function periodoCapital_() {
-    return state.capitalPeriodo || { modo: "hoje", valor: "" };
+  function componente_(valor, origem, quando, extra) {
+    return Object.assign({ valor: Number(valor || 0), disponivel: true, origem, quando: quando || null }, extra || {});
+  }
+  function indisponivel_(origem, motivo) {
+    return { valor: 0, disponivel: false, origem, motivo, quando: null };
   }
 
-  function dentroDoPeriodo_(dataIso, periodo) {
-    if (!dataIso) return false;
-    if (periodo.modo === "hoje") return true;
-    if (periodo.modo === "mes") return String(dataIso).slice(0, 7) === periodo.valor;
-    if (periodo.modo === "dia") return String(dataIso).slice(0, 10) === periodo.valor;
-    return true;
+  function fmtValor_(c) {
+    return c.disponivel ? fmtMoney(c.valor) : "—";
+  }
+  function selo_(c) {
+    if (!c.disponivel) return `<span class="badge badge--saida" title="${escapeHtml(c.motivo || "")}">⚠ não disponível</span>`;
+    return `<span class="muted" style="font-size:11px;">${escapeHtml(c.origem)}${c.quando ? " · " + c.quando : ""}</span>`;
   }
 
-  // ---- ESTOQUE: as duas contas do Mercado Livre
-  //
-  // Dentro da MESMA conta, o mesmo SKU em dois anúncios é o mesmo estoque —
-  // o ML repete o número em cada anúncio, e somar inflaria. Entre contas,
-  // soma: são CNPJs diferentes, com inventário separado no Mercado Livre.
-  function capitalEmEstoque_() {
+  // ---- 1. DINHEIRO DISPONÍVEL (só saldo do Mercado Pago)
+  function fpDisponivel_() {
+    const saldo = Number(state.saldo_mp || 0);
+    if (saldo > 0) {
+      return componente_(saldo, "saldo das 2 contas do Mercado Pago", null, { contas: 2 });
+    }
+    // Sem saldo real não há como saber o disponível. Somar tudo que já foi
+    // liberado seria mentira: dinheiro liberado sai da conta, e a aba de
+    // movimentos só registra entrada.
+    return indisponivel_("Mercado Pago",
+      "A API de saldo responde 403 nas duas contas. Rode atualizarSaldoPorRelatorio na planilha " +
+      "(ou preencha o saldo base na aba Saldo MP) pra este número existir.");
+  }
+
+  // ---- 2. A RECEBER (só o que está pending no Mercado Pago) + janelas
+  function fpAReceber_() {
+    const automaticos = recebiveisAutomaticosML_();
+    const manuais = (state.contas_receber || []).filter((c) => c.status === "A receber");
+
+    const hoje = isoDate_(new Date());
+    const emDias = (n) => isoDate_(new Date(Date.now() + n * 86400000));
+    const d7 = emDias(7), d30 = emDias(30);
+
+    const balde = { vencido: 0, hoje: 0, ate7: 0, ate30: 0, depois: 0, semData: 0 };
+    const somar = (venc, valor) => {
+      if (!venc) { balde.semData += valor; return; }
+      const v = String(venc).slice(0, 10);
+      if (v < hoje) balde.vencido += valor;
+      else if (v === hoje) balde.hoje += valor;
+      else if (v <= d7) balde.ate7 += valor;
+      else if (v <= d30) balde.ate30 += valor;
+      else balde.depois += valor;
+    };
+
+    let mp1 = 0, mp2 = 0;
+    automaticos.forEach((r) => {
+      const v = Number(r.valor || 0);
+      if (r.contaMp === "1") mp1 += v; else mp2 += v;
+      somar(r.vencimento, v);
+    });
+    let outros = 0;
+    manuais.forEach((c) => { const v = Number(c.valor || 0); outros += v; somar(c.vencimento, v); });
+
+    const total = mp1 + mp2 + outros;
+    return componente_(total, "Mercado Pago · pagamentos aprovados ainda não liberados", null,
+      { mp1, mp2, outros, balde, itens: automaticos.length + manuais.length });
+  }
+
+  // ---- 3. ESTOQUE a custo
+  function fpEstoque_() {
     const porContaSku = new Map();
     (state.linhasProdutosPorConta || []).forEach((p) => {
       const chave = p.conta + "|" + p.sku;
-      const a = porContaSku.get(chave) || { conta: p.conta, sku: p.sku, estoque: 0, custo: 0, ativo: false, titulo: p.titulo };
+      const a = porContaSku.get(chave) || {
+        conta: p.conta, sku: p.sku, titulo: p.titulo, estoque: 0, custo: 0,
+        ativo: false, qtd30: 0, ultimaVenda: null,
+      };
       a.estoque = Math.max(a.estoque, Number(p.estoque || 0));
       a.custo = Math.max(a.custo, Number(p.custo || 0));
+      a.qtd30 += Number(p.qtd30 || 0);
       if (!p.inativo) a.ativo = true;
+      if (p.ultimaVenda && (!a.ultimaVenda || p.ultimaVenda > a.ultimaVenda)) a.ultimaVenda = p.ultimaVenda;
       porContaSku.set(chave, a);
     });
 
-    let total = 0, ativo = 0, foraDoAr = 0, unidades = 0, anuncios = 0;
-    let conta1 = 0, conta2 = 0, semCusto = 0, unidadesSemCusto = 0;
-    const semCustoLista = [];
+    let total = 0, unidades = 0, anuncios = 0, foraDoAr = 0;
+    let semCusto = 0, unidadesSemCusto = 0, parado = 0, semGiro = 0, critico = 0;
+    const skus = new Set();
+    const semCustoLista = [], paradoLista = [];
+    const limite90 = isoDate_(new Date(Date.now() - 90 * 86400000));
 
     porContaSku.forEach((v) => {
       if (v.estoque <= 0) return;
-      if (v.custo <= 0) {
-        semCusto++;
-        unidadesSemCusto += v.estoque;
-        semCustoLista.push(v);
-        return;
-      }
+      skus.add(v.sku);
+      if (v.custo <= 0) { semCusto++; unidadesSemCusto += v.estoque; semCustoLista.push(v); return; }
+
       const valor = v.estoque * v.custo;
       total += valor;
       unidades += v.estoque;
       anuncios++;
-      if (v.conta === "1") conta1 += valor; else conta2 += valor;
-      if (v.ativo) ativo += valor; else foraDoAr += valor;
+      if (!v.ativo) foraDoAr += valor;
+
+      // Parado: nada vendido em 90 dias (ou nunca vendeu)
+      if (!v.ultimaVenda || v.ultimaVenda < limite90) { parado += valor; paradoLista.push(v); }
+      if (v.qtd30 === 0) semGiro++;
+      // Crítico: gira, mas o estoque acaba em menos de 7 dias
+      const porDia = v.qtd30 / 30;
+      if (porDia > 0 && v.estoque / porDia < 7) critico++;
     });
 
     semCustoLista.sort((a, b) => b.estoque - a.estoque);
-    return { total, ativo, foraDoAr, unidades, anuncios, conta1, conta2, semCusto, unidadesSemCusto, semCustoLista };
-  }
+    paradoLista.sort((a, b) => (b.estoque * b.custo) - (a.estoque * a.custo));
 
-  // ---- A RECEBER: os dois Mercado Pago + lançamentos manuais
-  function capitalAReceber_(periodo) {
-    const automaticos = recebiveisAutomaticosML_();
-    const noPeriodo = periodo.modo === "hoje"
-      ? automaticos
-      : automaticos.filter((r) => dentroDoPeriodo_(r.vencimento, periodo));
-
-    const mp1 = noPeriodo.filter((r) => r.contaMp === "1").reduce((s, r) => s + Number(r.valor || 0), 0);
-    const mp2 = noPeriodo.filter((r) => r.contaMp === "2").reduce((s, r) => s + Number(r.valor || 0), 0);
-
-    const manuaisLista = (state.contas_receber || []).filter((c) => c.status === "A receber");
-    const manuais = (periodo.modo === "hoje" ? manuaisLista : manuaisLista.filter((c) => dentroDoPeriodo_(c.vencimento, periodo)))
-      .reduce((s, c) => s + Number(c.valor || 0), 0);
-
-    return { total: mp1 + mp2 + manuais, mp1, mp2, manuais, itens: noPeriodo.length };
-  }
-
-  // ---- CAIXA: os dois Mercado Pago
-  //
-  // O número que vale é o SALDO das contas (state.saldo_mp, que vem da aba
-  // "Saldo MP" da planilha). Sem ele, o que sobra é somar tudo que já foi
-  // liberado — e isso NÃO é saldo: é quanto dinheiro já passou pela conta
-  // na vida. Dinheiro liberado sai (fornecedor, transferência, saque), e a
-  // aba de movimentos só registra entrada. Quando cai nesse caso, o card
-  // avisa em vermelho em vez de fingir que está certo.
-  function capitalEmCaixa_(periodo) {
-    const liberados = movimentosMpCombinados_()
-      .filter((m) => m.status_liberacao === "released" && pagamentoAprovado_(m));
-
-    const entrouNoPeriodo = periodo.modo === "hoje" ? null
-      : liberados.filter((m) => dentroDoPeriodo_(m.data_liberacao || m.data, periodo))
-                 .reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
-
-    const real = Number(state.saldo_mp || 0);
-    if (real > 0) return { valor: real, real: true, entrouNoPeriodo };
-
-    const jaLiberado = liberados.reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
-    return { valor: jaLiberado, real: false, entrouNoPeriodo };
-  }
-
-  // ---- P&L do período: o que a operação produziu
-  function resultadoDoPeriodo_(periodo) {
-    const todas = (state.transacoes || []).concat(state.transacoes_2 || []);
-    const doPeriodo = periodo.modo === "hoje"
-      ? todas.filter((t) => (t.data || "") >= isoDate_(new Date(Date.now() - 29 * 86400000)))
-      : todas.filter((t) => dentroDoPeriodo_(t.data, periodo));
-
-    let faturamento = 0, lucro = 0, unidades = 0;
-    const pedidos = new Set();
-    doPeriodo.forEach((t) => {
-      faturamento += Number(t.faturamento || 0);
-      lucro += Number(t.lucro || 0);
-      unidades += Number(t.quantidade || 0);
-      if (t.pedido_id) pedidos.add(t.pedido_id);
+    return componente_(total, "Mercado Livre · estoque × custo da aba Custos", null, {
+      unidades, anuncios, skus: skus.size, foraDoAr, parado, semGiro, critico,
+      semCusto, unidadesSemCusto, semCustoLista, paradoLista,
     });
+  }
+
+  // ---- 4. CONTAS A PAGAR + janelas
+  function fpAPagar_() {
+    const pendentes = (state.contas_pagar || []).filter((c) => c.status !== "Pago");
+    if (!(state.contas_pagar || []).length) {
+      return Object.assign(indisponivel_("Contas a pagar",
+        "Nenhuma conta lançada ainda. É o único bloco que depende de lançamento manual — " +
+        "não existe API que saiba dos seus fornecedores, impostos e aluguel."),
+        { balde: { vencido: 0, hoje: 0, ate7: 0, ate30: 0, depois: 0, semData: 0 }, porCategoria: {} });
+    }
+
+    const hoje = isoDate_(new Date());
+    const emDias = (n) => isoDate_(new Date(Date.now() + n * 86400000));
+    const d7 = emDias(7), d30 = emDias(30);
+    const balde = { vencido: 0, hoje: 0, ate7: 0, ate30: 0, depois: 0, semData: 0 };
+    const porCategoria = {};
+
+    let total = 0;
+    pendentes.forEach((c) => {
+      const v = Number(c.valor || 0);
+      total += v;
+      const cat = c.categoria || "Sem categoria";
+      porCategoria[cat] = (porCategoria[cat] || 0) + v;
+      const venc = c.vencimento ? String(c.vencimento).slice(0, 10) : "";
+      if (!venc) balde.semData += v;
+      else if (venc < hoje) balde.vencido += v;
+      else if (venc === hoje) balde.hoje += v;
+      else if (venc <= d7) balde.ate7 += v;
+      else if (venc <= d30) balde.ate30 += v;
+      else balde.depois += v;
+    });
+
+    return componente_(total, "lançamentos manuais · aba ContasAPagar", null,
+      { balde, porCategoria, itens: pendentes.length });
+  }
+
+  // ---- BALANÇO: ativos, passivos, patrimônio líquido
+  function fpBalanco_() {
+    const disponivel = fpDisponivel_();
+    const aReceber = fpAReceber_();
+    const estoque = fpEstoque_();
+    const aPagar = fpAPagar_();
+
+    const ativosComp = [disponivel, aReceber, estoque];
+    const passivosComp = [aPagar];
+
+    const ativos = ativosComp.reduce((s, c) => s + (c.disponivel ? c.valor : 0), 0);
+    const passivos = passivosComp.reduce((s, c) => s + (c.disponivel ? c.valor : 0), 0);
+
+    // Se algum pedaço não veio, o total existe mas está INCOMPLETO — e isso
+    // precisa aparecer, senão o gestor lê como se fosse o número fechado.
+    const faltando = ativosComp.concat(passivosComp).filter((c) => !c.disponivel);
+
     return {
-      faturamento, lucro, unidades, pedidos: pedidos.size,
-      margem: faturamento > 0 ? lucro / faturamento : 0,
-      rotulo: periodo.modo === "hoje" ? "últimos 30 dias" : rotuloPeriodo_(periodo),
+      disponivel, aReceber, estoque, aPagar,
+      ativos, passivos, patrimonio: ativos - passivos,
+      completo: faltando.length === 0,
+      faltando: faltando.map((c) => c.origem),
+      // Capital de giro: o que é líquido no curto prazo menos o que sai
+      giro: (disponivel.disponivel ? disponivel.valor : 0) + (aReceber.disponivel ? aReceber.valor : 0) - passivos,
     };
   }
 
-  function rotuloPeriodo_(p) {
-    if (p.modo === "mes") return fmtMesLabel_(p.valor + "-01");
-    if (p.modo === "dia") return p.valor.split("-").reverse().join("/");
-    return "hoje";
+  // ---- RECONCILIAÇÃO Mercado Livre × Mercado Pago
+  //
+  // Compara o que o ML diz que vendeu com o que apareceu no Mercado Pago,
+  // pelo número do pedido. Diferença esperada existe (comissão, frete), o
+  // que interessa é pedido que NÃO apareceu no MP de jeito nenhum.
+  function fpReconciliacao_(dias) {
+    const janela = isoDate_(new Date(Date.now() - (dias || 30) * 86400000));
+    const vendas = (state.transacoes || []).concat(state.transacoes_2 || [])
+      .filter((t) => (t.data || "") >= janela);
+
+    const porPedido = new Map();
+    vendas.forEach((t) => {
+      const id = String(t.pedido_id || "");
+      if (!id) return;
+      porPedido.set(id, (porPedido.get(id) || 0) + Number(t.faturamento || 0));
+    });
+
+    const noMp = new Set();
+    let recebidoMp = 0;
+    movimentosMpCombinados_().forEach((m) => {
+      if (!pagamentoAprovado_(m)) return;
+      const id = String(m.pedido_ml || "");
+      if (!id || !porPedido.has(id)) return;
+      noMp.add(id);
+      recebidoMp += valorLiquidoEfetivo_(m);
+    });
+
+    const semCorrespondencia = [];
+    let faturadoMl = 0, faturadoSemMp = 0;
+    porPedido.forEach((valor, id) => {
+      faturadoMl += valor;
+      if (!noMp.has(id)) { semCorrespondencia.push(id); faturadoSemMp += valor; }
+    });
+
+    const pedidos = porPedido.size;
+    const cobertura = pedidos ? noMp.size / pedidos : 1;
+    return {
+      dias: dias || 30, pedidos, casados: noMp.size, semCorrespondencia: semCorrespondencia.length,
+      faturadoMl, recebidoMp, faturadoSemMp, cobertura,
+      // Só acusa divergência quando pedido nenhum apareceu no MP — a
+      // diferença de VALOR é normal (é a comissão do ML e o frete).
+      ok: cobertura >= 0.95,
+    };
   }
 
-  // Meses que existem de verdade nos dados — não uma lista fixa que
-  // ofereceria períodos vazios.
-  function mesesComDados_() {
+  // ---- ALERTAS
+  function fpAlertas_(b) {
+    const a = [];
+    const add = (nivel, texto) => a.push({ nivel, texto });
+
+    if (!b.disponivel.disponivel) {
+      add("vermelho", "Saldo do Mercado Pago não disponível pela API — o disponível não pode ser calculado.");
+    } else {
+      if (b.aPagar.disponivel && b.aPagar.valor > b.disponivel.valor) {
+        add("laranja", `Contas a pagar (${fmtMoney(b.aPagar.valor)}) maiores que o dinheiro disponível (${fmtMoney(b.disponivel.valor)}).`);
+      }
+      if (b.aPagar.disponivel && b.aPagar.balde.vencido > 0) {
+        add("vermelho", `${fmtMoney(b.aPagar.balde.vencido)} em contas VENCIDAS.`);
+      }
+    }
+
+    if (b.estoque.semCusto > 0) {
+      add("amarelo", `${b.estoque.semCusto} anúncio(s) com ${fmtNum(b.estoque.unidadesSemCusto)} unidades sem custo cadastrado — ficam fora do valor do estoque.`);
+    }
+    if (b.estoque.parado > 0) {
+      const pct = b.estoque.valor > 0 ? b.estoque.parado / b.estoque.valor : 0;
+      add(pct > 0.4 ? "laranja" : "amarelo",
+        `${fmtMoney(b.estoque.parado)} (${fmtPct(pct)}) em estoque sem venda há mais de 90 dias.`);
+    }
+    if (b.estoque.critico > 0) {
+      add("amarelo", `${b.estoque.critico} produto(s) com estoque para menos de 7 dias no ritmo atual.`);
+    }
+    if (b.ativos > 0 && b.estoque.disponivel && b.estoque.valor / b.ativos > 0.7) {
+      add("laranja", `${fmtPct(b.estoque.valor / b.ativos)} do ativo está preso em estoque.`);
+    }
+    if (!b.aPagar.disponivel) {
+      add("amarelo", "Contas a pagar sem lançamentos — o passivo e o patrimônio líquido estão incompletos.");
+    }
+
+    const rec = fpReconciliacao_(30);
+    if (!rec.ok) {
+      add("vermelho", `${rec.semCorrespondencia} de ${rec.pedidos} pedidos dos últimos 30 dias não apareceram no Mercado Pago (${fmtMoney(rec.faturadoSemMp)}).`);
+    }
+    return { lista: a, reconciliacao: rec };
+  }
+
+  // ---------------------------------------------------------------- RENDER
+
+  function renderCapitalEmpresa_() {
+    const container = garantirContainerCapital_();
+    if (!container) return;
+
+    const b = fpBalanco_();
+    const { lista: alertas, reconciliacao: rec } = fpAlertas_(b);
+    const totalOnde = (b.disponivel.disponivel ? b.disponivel.valor : 0)
+                    + (b.aReceber.disponivel ? b.aReceber.valor : 0)
+                    + (b.estoque.disponivel ? b.estoque.valor : 0);
+    const onde = (v) => (totalOnde > 0 ? v / totalOnde : 0);
+
+    const cor = { vermelho: "#FF6B9D", laranja: "#FFA857", amarelo: "#FFD166" };
+
+    container.innerHTML = `
+      <div style="grid-column:1/-1;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:17px;font-weight:600;">Posição financeira</h2>
+        <span class="muted" style="font-size:12px;">o que a empresa tem hoje · não é resultado do período</span>
+        <span style="flex:1;"></span>
+        ${b.completo
+          ? `<span class="badge badge--manutencao">🟢 todos os blocos disponíveis</span>`
+          : `<span class="badge badge--saida">⚠ incompleto: ${escapeHtml(b.faltando.join(" · "))}</span>`}
+      </div>
+
+      <div class="fin-kpi ${b.disponivel.disponivel ? "fin-kpi--in" : "fin-kpi--out"}">
+        <span class="fin-kpi__value">💰 ${fmtValor_(b.disponivel)}</span>
+        <span class="fin-kpi__label">Disponível</span>
+        ${selo_(b.disponivel)}
+      </div>
+
+      <div class="fin-kpi fin-kpi--in">
+        <span class="fin-kpi__value">💳 ${fmtValor_(b.aReceber)}</span>
+        <span class="fin-kpi__label">A receber</span>
+        <span class="muted" style="font-size:11px;">
+          MP1 ${fmtMoney(b.aReceber.mp1)} · MP2 ${fmtMoney(b.aReceber.mp2)}${b.aReceber.outros > 0 ? " · outros " + fmtMoney(b.aReceber.outros) : ""}<br>
+          7d ${fmtMoney(b.aReceber.balde.hoje + b.aReceber.balde.ate7)} · 30d ${fmtMoney(b.aReceber.balde.ate30)} · depois ${fmtMoney(b.aReceber.balde.depois)}
+        </span>
+      </div>
+
+      <div class="fin-kpi">
+        <span class="fin-kpi__value">📦 ${fmtValor_(b.estoque)}</span>
+        <span class="fin-kpi__label">Estoque <span class="muted">a custo</span></span>
+        <span class="muted" style="font-size:11px;">
+          ${fmtNum(b.estoque.unidades)} un · ${b.estoque.skus} SKU · ${b.estoque.anuncios} anúncio(s)
+          ${b.estoque.semCusto > 0 ? `<br>⚠ ${b.estoque.semCusto} sem custo, fora da conta` : ""}
+        </span>
+      </div>
+
+      <div class="fin-kpi ${b.aPagar.disponivel && b.aPagar.valor > 0 ? "fin-kpi--out" : ""}">
+        <span class="fin-kpi__value">🔴 ${fmtValor_(b.aPagar)}</span>
+        <span class="fin-kpi__label">A pagar</span>
+        ${b.aPagar.disponivel ? `<span class="muted" style="font-size:11px;">
+          vencido ${fmtMoney(b.aPagar.balde.vencido)} · 7d ${fmtMoney(b.aPagar.balde.hoje + b.aPagar.balde.ate7)} · 30d ${fmtMoney(b.aPagar.balde.ate30)}
+        </span>` : selo_(b.aPagar)}
+      </div>
+
+      <div style="grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;
+                  padding:14px 16px;background:rgba(255,255,255,0.03);border-radius:12px;">
+        <div>
+          <div class="muted" style="font-size:11px;">🏦 TOTAL DE ATIVOS</div>
+          <div style="font-size:20px;font-weight:600;">${fmtMoney(b.ativos)}</div>
+          <div class="muted" style="font-size:11px;">disponível + a receber + estoque</div>
+        </div>
+        <div>
+          <div class="muted" style="font-size:11px;">🔴 TOTAL DE PASSIVOS</div>
+          <div style="font-size:20px;font-weight:600;">${b.aPagar.disponivel ? fmtMoney(b.passivos) : "—"}</div>
+          <div class="muted" style="font-size:11px;">contas a pagar em aberto</div>
+        </div>
+        <div>
+          <div class="muted" style="font-size:11px;">💎 PATRIMÔNIO LÍQUIDO</div>
+          <div style="font-size:22px;font-weight:700;color:${b.patrimonio >= 0 ? "#5BE49B" : "#FF6B9D"};">
+            ${fmtMoney(b.patrimonio)}</div>
+          <div class="muted" style="font-size:11px;">ativos − passivos${b.completo ? "" : " · incompleto"}</div>
+        </div>
+        <div>
+          <div class="muted" style="font-size:11px;">⚙ CAPITAL DE GIRO</div>
+          <div style="font-size:20px;font-weight:600;">${b.disponivel.disponivel ? fmtMoney(b.giro) : "—"}</div>
+          <div class="muted" style="font-size:11px;">disponível + a receber − a pagar</div>
+        </div>
+      </div>
+
+      <div style="grid-column:1/-1;padding:14px 16px;background:rgba(255,255,255,0.03);border-radius:12px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:10px;">Onde está o dinheiro?</div>
+        ${[
+          { icone: "🏦", nome: "Caixa / Mercado Pago", c: b.disponivel, cor: "#5BE49B" },
+          { icone: "💳", nome: "A receber", c: b.aReceber, cor: "#5B9CFF" },
+          { icone: "📦", nome: "Estoque", c: b.estoque, cor: "#FFA857" },
+        ].map((l) => {
+          const p = l.c.disponivel ? onde(l.c.valor) : 0;
+          return `
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px;">
+              <span style="width:190px;font-size:13px;">${l.icone} ${l.nome}</span>
+              <span style="width:110px;text-align:right;font-size:13px;font-weight:600;">${fmtValor_(l.c)}</span>
+              <span style="flex:1;height:9px;background:rgba(255,255,255,0.07);border-radius:5px;overflow:hidden;">
+                <span style="display:block;height:100%;width:${(p * 100).toFixed(1)}%;background:${l.cor};"></span>
+              </span>
+              <span style="width:52px;text-align:right;font-size:12px;" class="muted">${l.c.disponivel ? fmtPct(p) : "—"}</span>
+            </div>`;
+        }).join("")}
+        <div style="display:flex;gap:10px;margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,0.08);">
+          <span style="width:190px;font-size:13px;font-weight:600;">TOTAL</span>
+          <span style="width:110px;text-align:right;font-size:13px;font-weight:700;">${fmtMoney(totalOnde)}</span>
+          <span style="flex:1;"></span>
+        </div>
+      </div>
+
+      <div style="grid-column:1/-1;display:flex;gap:16px;flex-wrap:wrap;font-size:12px;padding:0 4px;">
+        <span>${rec.ok ? "🟢 CONCILIADO" : "🔴 DIVERGÊNCIA"}</span>
+        <span class="muted">${rec.casados}/${rec.pedidos} pedidos dos últimos ${rec.dias} dias apareceram no Mercado Pago</span>
+        <span class="muted">ML ${fmtMoney(rec.faturadoMl)} → MP ${fmtMoney(rec.recebidoMp)} (a diferença é comissão e frete)</span>
+      </div>
+
+      ${alertas.length ? `
+        <div style="grid-column:1/-1;padding:12px 16px;border-radius:12px;background:rgba(255,255,255,0.03);">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Alertas</div>
+          ${alertas.map((a) => `
+            <div style="font-size:12px;line-height:1.7;">
+              <span style="color:${cor[a.nivel]};">●</span> ${a.texto}
+            </div>`).join("")}
+        </div>` : ""}
+    `;
+  }
+
+  // Se o HTML não tiver o container, cria um logo abaixo das métricas do
+  // topo. Assim o painel aparece sem precisar editar o index.html.
+  function garantirContainerCapital_() {
+    let el = document.getElementById("capitalEmpresaRow");
+    if (el) return el;
+    const ancora = document.getElementById("metricasChaveHoje") || document.getElementById("dashboard");
+    if (!ancora) return null;
+    el = document.createElement("div");
+    el.id = "capitalEmpresaRow";
+    el.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin:24px 0 8px;";
+    ancora.parentNode.insertBefore(el, ancora.nextSibling);
+    return el;
+  }
+
+
+  // ============================================================ DRE / P&L
+  //
+  // Tela SEPARADA da posição financeira, e essa separação é o ponto.
+  //
+  // A posição responde "quanto temos?" — é uma foto do patrimônio hoje.
+  // O DRE responde "quanto ganhamos?" — é um filme de um período.
+  //
+  // Misturar os dois é o erro clássico: faturamento não é ativo, e estoque
+  // não é receita. Somar venda com saldo conta o mesmo dinheiro duas vezes,
+  // porque a venda VIRA saldo depois de liberada.
+  //
+  // Aqui o período faz todo sentido (é um intervalo de tempo), enquanto na
+  // posição não faria nenhum (não existe registro do estoque de março).
+  //
+  // A conta vem da RAW_Vendas, que é a regra da casa:
+  //     Lucro = Faturamento − Custo − Taxa ML − Frete
+
+  function periodoDre_() {
+    return state.capitalPeriodo || { modo: "mes", valor: isoDate_(new Date()).slice(0, 7) };
+  }
+
+  function mesesComVenda_() {
     const set = new Set();
     (state.transacoes || []).concat(state.transacoes_2 || []).forEach((t) => {
       if (t.data) set.add(String(t.data).slice(0, 7));
     });
-    movimentosMpCombinados_().forEach((m) => {
-      const d = m.data_liberacao || m.data;
-      if (d) set.add(String(d).slice(0, 7));
-    });
     return Array.from(set).sort().reverse();
   }
 
-  function renderCapitalEmpresa_() {
-    const periodo = periodoCapital_();
-    const estoque = capitalEmEstoque_();
-    const aReceber = capitalAReceber_(periodo);
-    const caixa = capitalEmCaixa_(periodo);
-    const pl = resultadoDoPeriodo_(periodo);
+  function intervaloDoPeriodo_(p) {
+    const hoje = new Date();
+    const iso = (d) => isoDate_(d);
+    const menos = (n) => { const d = new Date(hoje); d.setDate(d.getDate() - n); return d; };
 
-    const total = estoque.total + aReceber.total + caixa.valor;
-    const pct = (v) => (total > 0 ? v / total : 0);
-
-    const container = garantirContainerCapital_();
-    if (!container) return;
-
-    const meses = mesesComDados_();
-    const hojeIso = isoDate_(new Date());
-
-    const avisos = [];
-    if (!caixa.real) {
-      avisos.push(`O caixa <strong>não é o saldo de hoje</strong> — é a soma de tudo que já foi liberado desde sempre.
-        Preencha o saldo das duas contas na aba "Saldo MP" da planilha e rode <code>gerarCapitalEmpresa</code>.`);
+    if (p.modo === "hoje")  return { de: iso(hoje), ate: iso(hoje), rotulo: "hoje" };
+    if (p.modo === "ontem") { const o = menos(1); return { de: iso(o), ate: iso(o), rotulo: "ontem" }; }
+    if (p.modo === "7d")    return { de: iso(menos(6)), ate: iso(hoje), rotulo: "últimos 7 dias" };
+    if (p.modo === "30d")   return { de: iso(menos(29)), ate: iso(hoje), rotulo: "últimos 30 dias" };
+    if (p.modo === "dia")   return { de: p.valor, ate: p.valor, rotulo: p.valor.split("-").reverse().join("/") };
+    if (p.modo === "mes") {
+      const m = p.valor || iso(hoje).slice(0, 7);
+      return { de: m + "-01", ate: m + "-31", rotulo: fmtMesLabel_(m + "-01") };
     }
-    if (estoque.semCusto > 0) {
-      avisos.push(`<strong>${estoque.semCusto} anúncio(s)</strong> com ${fmtNum(estoque.unidadesSemCusto)} unidades em estoque
-        estão fora desta conta por não terem custo cadastrado. Preencha na aba Custos — é o que mais falta pro número fechar.`);
-    }
-    if (periodo.modo !== "hoje") {
-      avisos.push(`Período selecionado: o estoque mostrado é o de <strong>hoje</strong> (não existe registro de
-        quanto estoque havia numa data passada). A receber, caixa e resultado são do período.`);
-    }
-
-    container.innerHTML = `
-      <div class="capital-header" style="grid-column:1/-1;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px;">
-        <h2 style="margin:0;font-size:17px;font-weight:600;">Capital da empresa</h2>
-        <span class="muted" style="font-size:12px;">o que está rodando · duas contas ML + dois Mercado Pago</span>
-        <span style="flex:1;"></span>
-        <select id="capitalPeriodoModo" class="search-input" style="min-width:120px;">
-          <option value="hoje" ${periodo.modo === "hoje" ? "selected" : ""}>Foto de hoje</option>
-          <option value="mes"  ${periodo.modo === "mes"  ? "selected" : ""}>Por mês</option>
-          <option value="dia"  ${periodo.modo === "dia"  ? "selected" : ""}>Por dia</option>
-        </select>
-        ${periodo.modo === "mes" ? `
-          <select id="capitalPeriodoValor" class="search-input" style="min-width:150px;">
-            ${meses.map((m) => `<option value="${m}" ${m === periodo.valor ? "selected" : ""}>${fmtMesLabel_(m + "-01")}</option>`).join("")}
-          </select>` : ""}
-        ${periodo.modo === "dia" ? `
-          <input type="date" id="capitalPeriodoValor" class="search-input" value="${periodo.valor || hojeIso}" max="${hojeIso}">` : ""}
-      </div>
-
-      <div class="fin-kpi">
-        <span class="fin-kpi__value">${fmtMoney(estoque.total)}</span>
-        <span class="fin-kpi__label">Em estoque · ${fmtPct(pct(estoque.total))}</span>
-        <span class="muted" style="font-size:11px;">
-          ${fmtNum(estoque.unidades)} un em ${estoque.anuncios} anúncio(s)<br>
-          ↳ ML conta 1: ${fmtMoney(estoque.conta1)} · conta 2: ${fmtMoney(estoque.conta2)}
-          ${estoque.foraDoAr > 0 ? `<br>↳ ${fmtMoney(estoque.foraDoAr)} em anúncio fora do ar` : ""}
-        </span>
-      </div>
-
-      <div class="fin-kpi fin-kpi--in">
-        <span class="fin-kpi__value">${fmtMoney(aReceber.total)}</span>
-        <span class="fin-kpi__label">A receber · ${fmtPct(pct(aReceber.total))}</span>
-        <span class="muted" style="font-size:11px;">
-          ${periodo.modo === "hoje" ? "tudo que ainda não liberou" : "libera em " + rotuloPeriodo_(periodo)}<br>
-          ↳ MP conta 1: ${fmtMoney(aReceber.mp1)} · conta 2: ${fmtMoney(aReceber.mp2)}
-          ${aReceber.manuais > 0 ? `<br>↳ manuais: ${fmtMoney(aReceber.manuais)}` : ""}
-        </span>
-      </div>
-
-      <div class="fin-kpi ${caixa.real ? "fin-kpi--in" : "fin-kpi--out"}">
-        <span class="fin-kpi__value">${fmtMoney(caixa.valor)}</span>
-        <span class="fin-kpi__label">Em caixa · ${fmtPct(pct(caixa.valor))}</span>
-        <span class="muted" style="font-size:11px;">
-          ${caixa.real ? "saldo das 2 contas do Mercado Pago" : "⚠ não é o saldo de hoje"}
-          ${caixa.entrouNoPeriodo !== null ? `<br>↳ entrou em ${rotuloPeriodo_(periodo)}: ${fmtMoney(caixa.entrouNoPeriodo)}` : ""}
-        </span>
-      </div>
-
-      <div class="fin-kpi fin-kpi--profit">
-        <span class="fin-kpi__value">${fmtMoney(total)}</span>
-        <span class="fin-kpi__label">Capital total · 100%</span>
-        <span class="muted" style="font-size:11px;">estoque + a receber + caixa</span>
-      </div>
-
-      <div style="grid-column:1/-1;display:flex;gap:24px;flex-wrap:wrap;padding:12px 16px;margin-top:4px;
-                  background:rgba(255,255,255,0.03);border-radius:10px;">
-        <div><span class="muted" style="font-size:11px;">Resultado · ${pl.rotulo}</span></div>
-        <div><strong>${fmtMoney(pl.faturamento)}</strong> <span class="muted" style="font-size:11px;">faturamento</span></div>
-        <div><strong>${fmtMoney(pl.lucro)}</strong> <span class="muted" style="font-size:11px;">lucro</span></div>
-        <div><strong>${fmtPct(pl.margem)}</strong> <span class="muted" style="font-size:11px;">margem</span></div>
-        <div><strong>${fmtNum(pl.pedidos)}</strong> <span class="muted" style="font-size:11px;">pedidos</span></div>
-        <div><strong>${fmtNum(pl.unidades)}</strong> <span class="muted" style="font-size:11px;">unidades</span></div>
-      </div>
-
-      ${avisos.length ? `
-        <div style="grid-column:1/-1;padding:10px 16px;border-radius:10px;
-                    background:rgba(255,107,157,0.08);border:1px solid rgba(255,107,157,0.25);font-size:12px;line-height:1.6;">
-          ${avisos.map((a) => `<div>• ${a}</div>`).join("")}
-        </div>` : ""}
-    `;
-
-    const selModo = document.getElementById("capitalPeriodoModo");
-    if (selModo) {
-      selModo.addEventListener("change", () => {
-        const modo = selModo.value;
-        const meses2 = mesesComDados_();
-        state.capitalPeriodo = {
-          modo,
-          valor: modo === "mes" ? (meses2[0] || hojeIso.slice(0, 7)) : modo === "dia" ? hojeIso : "",
-        };
-        renderCapitalEmpresa_();
-      });
-    }
-    const selValor = document.getElementById("capitalPeriodoValor");
-    if (selValor) {
-      selValor.addEventListener("change", () => {
-        state.capitalPeriodo = { modo: periodo.modo, valor: selValor.value };
-        renderCapitalEmpresa_();
-      });
-    }
+    return { de: iso(menos(29)), ate: iso(hoje), rotulo: "últimos 30 dias" };
   }
 
-  // Se o HTML não tiver o container, cria um logo abaixo das métricas do
-  // topo. Assim o card aparece sem precisar editar o index.html.
-  function garantirContainerCapital_() {
-    let el = document.getElementById("capitalEmpresaRow");
+  function calcularDre_(p) {
+    const { de, ate, rotulo } = intervaloDoPeriodo_(p);
+    const todas = (state.transacoes || []).concat(state.transacoes_2 || []);
+    const doPeriodo = todas.filter((t) => {
+      const d = String(t.data || "");
+      return d >= de && d <= ate;
+    });
+
+    let faturamento = 0, custo = 0, taxa = 0, frete = 0, unidades = 0;
+    const pedidos = new Set();
+    doPeriodo.forEach((t) => {
+      faturamento += Number(t.faturamento || 0);
+      custo += Number(t.custo || 0);
+      taxa += Number(t.taxa_ml || 0);
+      frete += Number(t.frete || 0);
+      unidades += Number(t.quantidade || 0);
+      if (t.pedido_id) pedidos.add(t.pedido_id);
+    });
+
+    // Devoluções do mesmo período — dinheiro que voltou pro comprador
+    const devolvido = (state.devolucoes || []).concat(state.devolucoes_2 || [])
+      .filter((d) => { const x = String(d.data || ""); return x >= de && x <= ate; })
+      .reduce((s, d) => s + Number(d.valor_reembolsado || 0), 0);
+
+    const lucro = faturamento - custo - taxa - frete;
+    return {
+      rotulo, de, ate, faturamento, custo, taxa, frete, lucro, devolvido, unidades,
+      pedidos: pedidos.size,
+      margem: faturamento > 0 ? lucro / faturamento : 0,
+      ticket: pedidos.size > 0 ? faturamento / pedidos.size : 0,
+      lucroLiquido: lucro - devolvido,
+    };
+  }
+
+  function renderDre_() {
+    const el = garantirContainerDre_();
+    if (!el) return;
+
+    const p = periodoDre_();
+    const d = calcularDre_(p);
+    const meses = mesesComVenda_();
+    const hojeIso = isoDate_(new Date());
+    const linha = (rotulo, valor, nota, forte) => `
+      <div style="display:flex;align-items:baseline;gap:10px;padding:5px 0;${forte ? "border-top:1px solid rgba(255,255,255,0.1);margin-top:4px;" : ""}">
+        <span style="flex:1;font-size:13px;${forte ? "font-weight:600;" : ""}">${rotulo}</span>
+        <span style="width:130px;text-align:right;font-size:13px;${forte ? "font-weight:700;" : ""}">${valor}</span>
+        <span style="width:170px;font-size:11px;" class="muted">${nota || ""}</span>
+      </div>`;
+
+    el.innerHTML = `
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+        <h2 style="margin:0;font-size:17px;font-weight:600;">📈 DRE · resultado</h2>
+        <span class="muted" style="font-size:12px;">quanto a operação ganhou — não é patrimônio</span>
+        <span style="flex:1;"></span>
+        <select id="dreModo" class="search-input" style="min-width:145px;">
+          ${[["hoje","Hoje"],["ontem","Ontem"],["7d","Últimos 7 dias"],["30d","Últimos 30 dias"],["mes","Por mês"],["dia","Dia específico"]]
+            .map(([v,t]) => `<option value="${v}" ${p.modo === v ? "selected" : ""}>${t}</option>`).join("")}
+        </select>
+        ${p.modo === "mes" ? `<select id="dreValor" class="search-input" style="min-width:150px;">
+          ${meses.map((m) => `<option value="${m}" ${m === p.valor ? "selected" : ""}>${fmtMesLabel_(m + "-01")}</option>`).join("")}
+        </select>` : ""}
+        ${p.modo === "dia" ? `<input type="date" id="dreValor" class="search-input" value="${p.valor || hojeIso}" max="${hojeIso}">` : ""}
+      </div>
+
+      <div style="padding:14px 16px;background:rgba(255,255,255,0.03);border-radius:12px;">
+        <div class="muted" style="font-size:11px;margin-bottom:8px;">${escapeHtml(d.rotulo)} · ${fmtNum(d.pedidos)} pedidos · ${fmtNum(d.unidades)} unidades</div>
+        ${linha("Faturamento bruto", fmtMoney(d.faturamento), "venda no Mercado Livre")}
+        ${linha("(−) Custo do produto", fmtMoney(-d.custo), "aba Custos")}
+        ${linha("(−) Comissão Mercado Livre", fmtMoney(-d.taxa), "cobrada por venda")}
+        ${linha("(−) Frete", fmtMoney(-d.frete), "quando é por sua conta")}
+        ${linha("= Lucro operacional", fmtMoney(d.lucro), fmtPct(d.margem) + " de margem", true)}
+        ${d.devolvido > 0 ? linha("(−) Devoluções", fmtMoney(-d.devolvido), "reembolsado ao comprador") : ""}
+        ${d.devolvido > 0 ? linha("= Lucro líquido", fmtMoney(d.lucroLiquido), "já sem devoluções", true) : ""}
+        <div style="display:flex;gap:22px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;">
+          <span><strong>${fmtMoney(d.ticket)}</strong> <span class="muted">ticket médio</span></span>
+          <span><strong>${fmtPct(d.margem)}</strong> <span class="muted">margem</span></span>
+          <span class="muted">${d.lucro >= 0 ? "🟢 operação lucrativa no período" : "🔴 prejuízo no período"}</span>
+        </div>
+      </div>
+    `;
+
+    const selModo = document.getElementById("dreModo");
+    if (selModo) selModo.addEventListener("change", () => {
+      const modo = selModo.value;
+      const ms = mesesComVenda_();
+      state.capitalPeriodo = {
+        modo,
+        valor: modo === "mes" ? (ms[0] || hojeIso.slice(0, 7)) : modo === "dia" ? hojeIso : "",
+      };
+      renderDre_();
+    });
+    const selValor = document.getElementById("dreValor");
+    if (selValor) selValor.addEventListener("change", () => {
+      state.capitalPeriodo = { modo: p.modo, valor: selValor.value };
+      renderDre_();
+    });
+  }
+
+  function garantirContainerDre_() {
+    let el = document.getElementById("dreRow");
     if (el) return el;
-
-    const ancora = document.getElementById("metricasChaveHoje") || document.getElementById("dashboard");
+    const ancora = document.getElementById("capitalEmpresaRow");
     if (!ancora) return null;
-
     el = document.createElement("div");
-    el.id = "capitalEmpresaRow";
-    el.className = "fin-kpi-row";
-    el.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin:24px 0 8px;";
+    el.id = "dreRow";
+    el.style.cssText = "margin:26px 0 8px;";
     ancora.parentNode.insertBefore(el, ancora.nextSibling);
     return el;
   }
