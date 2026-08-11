@@ -129,8 +129,28 @@
       state.devolucoes_2 = data.devolucoes_2 || [];
       state.movimentos_mp = (data.movimentos_mp || []).map((m) => ({ ...m, contaMp: "1" }));
       state.movimentos_mp_2 = (data.movimentos_mp_2 || []).map((m) => ({ ...m, contaMp: "2" }));
+      // Guarda o que veio da API pra dar pra inspecionar no console do
+      // navegador sem precisar de ferramenta nenhuma:
+      //     tekoDebug()
+      window.tekoDebug = function () {
+        const campos = Object.keys(data).sort();
+        console.log("Campos recebidos da API:", campos);
+        console.log("saldo_mp está na resposta?", campos.indexOf("saldo_mp") >= 0);
+        console.log("valor de saldo_mp:", data.saldo_mp);
+        console.log("gerado em:", data.gerado_em);
+        return data;
+      };
       state.contas_pagar = data.contas_pagar || [];
       state.contas_receber = data.contas_receber || [];
+      // Saldo em caixa das duas contas do Mercado Pago.
+      //
+      // ATENÇÃO ao "|| 0": aqui ele NÃO pode existir. Se o campo não vier
+      // da API, o valor tem que continuar undefined, porque é exatamente
+      // isso que o fpDisponivel_ usa pra saber a diferença entre
+      // "a implantação do WebApp.gs está velha" e "a planilha está zerada".
+      // Trocar undefined por 0 apaga essa distinção e o painel volta a
+      // dizer "não disponível" sem explicar o motivo.
+      state.saldo_mp = data.saldo_mp;
       state.produtos_conta1_raw = data.produtos_conta1_raw || [];
       state.produtos_conta2_raw = data.produtos_conta2_raw || [];
 
@@ -2201,12 +2221,30 @@
     return c.disponivel ? fmtMoney(c.valor) : "—";
   }
   function selo_(c) {
-    if (!c.disponivel) return `<span class="badge badge--saida" title="${escapeHtml(c.motivo || "")}">⚠ não disponível</span>`;
+    if (!c.disponivel) {
+      return `<span class="badge badge--saida">⚠ não disponível</span>
+        ${c.motivo ? `<span class="muted" style="font-size:10px;line-height:1.5;display:block;margin-top:5px;">${escapeHtml(c.motivo)}</span>` : ""}`;
+    }
     return `<span class="muted" style="font-size:11px;">${escapeHtml(c.origem)}${c.quando ? " · " + c.quando : ""}</span>`;
   }
 
   // ---- 1. DINHEIRO DISPONÍVEL (só saldo do Mercado Pago)
   function fpDisponivel_() {
+    // Distingue TRÊS situações que antes viravam a mesma mensagem:
+    //
+    //   a) o campo saldo_mp nem chegou    → a implantação do WebApp.gs é
+    //                                        antiga (salvar não republica)
+    //   b) chegou, mas está zerado        → a planilha é que está sem saldo
+    //   c) chegou com valor               → tudo certo
+    //
+    // Sem essa separação a gente fica trocando mensagem no escuro: o painel
+    // dizia "não disponível" tanto quando o problema era publicação quanto
+    // quando era preenchimento.
+    if (!Object.prototype.hasOwnProperty.call(state, "saldo_mp") || state.saldo_mp === undefined) {
+      return indisponivel_("Mercado Pago",
+        "O site não recebeu o campo saldo_mp. A implantação do WebApp.gs está desatualizada — " +
+        "Implantar → Gerenciar implantações → lápis → Nova versão.");
+    }
     const saldo = Number(state.saldo_mp || 0);
     // Barreira contra número absurdo. Já aconteceu: uma coluna de DATA foi
     // lida como dinheiro e o caixa virou R$ 3,5 trilhões. Um número desses
@@ -2219,12 +2257,11 @@
     if (saldo > 0) {
       return componente_(saldo, "saldo das 2 contas do Mercado Pago", null, { contas: 2 });
     }
-    // Sem saldo real não há como saber o disponível. Somar tudo que já foi
-    // liberado seria mentira: dinheiro liberado sai da conta, e a aba de
-    // movimentos só registra entrada.
+    // O campo chegou, mas veio zerado: aqui o problema é na planilha, não
+    // na publicação.
     return indisponivel_("Mercado Pago",
-      "A API de saldo responde 403 nas duas contas. Rode atualizarSaldoPorRelatorio na planilha " +
-      "(ou preencha o saldo base na aba Saldo MP) pra este número existir.");
+      "O campo chegou mas está zerado. Na planilha, preencha o saldo das duas contas na aba " +
+      "\"Saldo MP\" (colunas B e C) e rode atualizarCapital.");
   }
 
   // ---- 2. A RECEBER (só o que está pending no Mercado Pago) + janelas
