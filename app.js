@@ -2241,6 +2241,11 @@
       return `<span class="badge badge--saida">⚠ não disponível</span>
         ${c.motivo ? `<span class="muted" style="font-size:10px;line-height:1.5;display:block;margin-top:5px;">${escapeHtml(c.motivo)}</span>` : ""}`;
     }
+    // Valor verdadeiro, mas incompleto: laranja, não cinza. Se ficar com a
+    // mesma cara de um número fechado, ninguém lê a legenda.
+    if (c.parcial) {
+      return `<span class="muted" style="font-size:11px;color:#FFA857;">⚠ ${escapeHtml(c.origem)}${c.quando ? " · " + c.quando : ""}</span>`;
+    }
     return `<span class="muted" style="font-size:11px;">${escapeHtml(c.origem)}${c.quando ? " · " + c.quando : ""}</span>`;
   }
 
@@ -2261,7 +2266,35 @@
         "O site não recebeu o campo saldo_mp. A implantação do WebApp.gs está desatualizada — " +
         "Implantar → Gerenciar implantações → lápis → Nova versão.");
     }
-    const saldo = Number(state.saldo_mp || 0);
+
+    // O saldo_mp pode chegar de duas formas:
+    //   número  → versão antiga do Capital.gs, só o total
+    //   objeto  → versão nova: { total, contas: [...], completo }
+    //
+    // O card continua mostrando UM número só, que é o que interessa: o
+    // dinheiro das duas contas somado. O detalhe por conta não vai pra
+    // tela — ele serve só pra uma coisa, que é saber se as duas realmente
+    // entraram na conta. Sem isso, o painel mostrava R$ 4,96 com o rótulo
+    // "saldo das 2 contas" quando na verdade era o saldo de UMA. Um total
+    // parcial com cara de total completo é pior que um aviso.
+    const bruto = state.saldo_mp;
+    const objeto = bruto && typeof bruto === "object";
+
+    if (objeto && bruto.erro) {
+      return indisponivel_("Mercado Pago", bruto.erro);
+    }
+
+    const saldo = Number(objeto ? bruto.total : bruto);
+    const contas = objeto && Array.isArray(bruto.contas) ? bruto.contas : [];
+    const faltando = contas.filter((c) => c.estado !== "lido");
+    const lidas = contas.filter((c) => c.estado === "lido");
+
+    if (objeto && bruto.total === null) {
+      return indisponivel_("Mercado Pago",
+        "Nenhuma das contas tem saldo preenchido na aba \"Saldo MP\"" +
+        (faltando.length ? " — " + faltando.map((c) => "conta " + c.conta + ": " + c.motivo).join("; ") : "") + ".");
+    }
+
     // Barreira contra número absurdo. Já aconteceu: uma coluna de DATA foi
     // lida como dinheiro e o caixa virou R$ 3,5 trilhões. Um número desses
     // num painel financeiro contamina tudo em volta — percentual,
@@ -2270,6 +2303,23 @@
       return indisponivel_("Mercado Pago",
         "O saldo veio com um valor impossível (" + saldo + "). Confira a aba Saldo MP na planilha.");
     }
+
+    // Alguma conta ficou de fora: o número que sobrou é verdadeiro, mas é
+    // parcial. Mostra o valor (esconder ajuda menos) e diz na cara qual
+    // conta não entrou, pra você não conferir contra o app achando que
+    // está comparando a mesma coisa.
+    if (objeto && faltando.length) {
+      return componente_(saldo,
+        "só a conta " + lidas.map((c) => c.conta).join(" e ") + " — falta a conta " +
+        faltando.map((c) => c.conta).join(" e "),
+        null,
+        { parcial: true, faltando: faltando });
+    }
+
+    if (objeto) {
+      return componente_(saldo, "saldo das " + lidas.length + " contas do Mercado Pago", null, { contas: lidas.length });
+    }
+
     if (saldo > 0) {
       return componente_(saldo, "saldo das 2 contas do Mercado Pago", null, { contas: 2 });
     }
