@@ -1949,9 +1949,26 @@
   // dele fica "pending" pra sempre) — antes, esses somavam no "Total a
   // receber" eternamente, e era por isso que o site mostrava um valor
   // MAIOR que o "a liberar" real do app do Mercado Pago.
+  // Pagamento que conta como A RECEBER.
+  //
+  // Não é só "approved": o app do Mercado Pago inclui também o que está EM
+  // MEDIAÇÃO — venda em disputa, dinheiro retido até resolver. Na conta 1
+  // isso era R$ 169,76, exatamente a diferença entre o que o painel
+  // mostrava e o total do app.
+  //
+  // É dinheiro seu, então entra. Mas vem marcado, porque depende de ganhar
+  // a disputa.
+  function contaComoReceber_(m) {
+    const s = String(m.status || "").toLowerCase();
+    return s === "approved" || s === "in_mediation";
+  }
+  function emMediacao_(m) {
+    return String(m.status || "").toLowerCase() === "in_mediation";
+  }
+
   function recebiveisAutomaticosML_() {
     return movimentosMpCombinados_()
-      .filter((m) => m.origem === "Mercado Livre" && m.status_liberacao === "pending" && pagamentoAprovado_(m))
+      .filter((m) => m.origem === "Mercado Livre" && m.status_liberacao === "pending" && contaComoReceber_(m))
       .map((m) => ({
         id: "ml_" + m.pagamento_id,
         descricao: m.descricao || "Venda Mercado Livre",
@@ -1962,6 +1979,7 @@
         status: "A receber",
         automatico: true,
         contaMp: m.contaMp,
+        mediacao: emMediacao_(m),
       }));
   }
 
@@ -2235,11 +2253,14 @@
     // não é "a receber" no mesmo sentido: é entrega não confirmada,
     // reclamação ou mediação. Pode não cair nunca. Somar os dois esconde um
     // problema de operação atrás de um número que parece saudável.
-    let mp1 = 0, mp2 = 0, retido = 0, retidoItens = 0;
+    let mp1 = 0, mp2 = 0, retido = 0, retidoItens = 0, mediacao = 0, mediacaoItens = 0;
     automaticos.forEach((r) => {
       const v = Number(r.valor || 0);
+      if (r.mediacao) { mediacao += v; mediacaoItens++; }
       const venc = r.vencimento ? String(r.vencimento).slice(0, 10) : "";
-      if (venc && venc < hoje) { retido += v; retidoItens++; return; }
+      // Em mediação não vira "retido" mesmo com data vencida — é outra
+      // situação: não é entrega parada, é disputa aberta.
+      if (!r.mediacao && venc && venc < hoje) { retido += v; retidoItens++; return; }
       if (r.contaMp === "1") mp1 += v; else mp2 += v;
       somar(r.vencimento, v);
     });
@@ -2248,7 +2269,8 @@
 
     const total = mp1 + mp2 + outros;
     return componente_(total, "Mercado Pago · aprovado, com data pra liberar", null,
-      { mp1, mp2, outros, balde, retido, retidoItens, itens: automaticos.length + manuais.length });
+      { mp1, mp2, outros, balde, retido, retidoItens, mediacao, mediacaoItens,
+        itens: automaticos.length + manuais.length });
   }
 
   // ---- 3. ESTOQUE a custo
@@ -2475,6 +2497,9 @@
       add("amarelo", "Contas a pagar sem lançamentos — o passivo e o patrimônio líquido estão incompletos.");
     }
 
+    if (b.aReceber.mediacao > 0) {
+      add("laranja", `${fmtMoney(b.aReceber.mediacao)} em ${b.aReceber.mediacaoItens} venda(s) em mediação — está contado no a receber, mas depende de ganhar a disputa.`);
+    }
     if (b.aReceber.retido > 0) {
       add("laranja", `${fmtMoney(b.aReceber.retido)} em ${b.aReceber.retidoItens} pagamento(s) passaram da data de liberação e não caíram — entrega não confirmada, reclamação ou mediação.`);
     }
@@ -2537,6 +2562,7 @@
           MP1 ${fmtMoney(b.aReceber.mp1)} · MP2 ${fmtMoney(b.aReceber.mp2)}${b.aReceber.outros > 0 ? " · outros " + fmtMoney(b.aReceber.outros) : ""}<br>
           7d ${fmtMoney(b.aReceber.balde.hoje + b.aReceber.balde.ate7)} · 30d ${fmtMoney(b.aReceber.balde.ate30)} · depois ${fmtMoney(b.aReceber.balde.depois)}
           ${b.aReceber.retido > 0 ? `<br><span style="color:#FFA857;">⚠ ${fmtMoney(b.aReceber.retido)} retido em ${b.aReceber.retidoItens} pagamento(s) — passou da data e não caiu</span>` : ""}
+          ${b.aReceber.mediacao > 0 ? `<br><span style="color:#FFA857;">⚠ ${fmtMoney(b.aReceber.mediacao)} em ${b.aReceber.mediacaoItens} venda(s) em disputa</span>` : ""}
         </span>
       </div>
 
