@@ -2268,7 +2268,7 @@
       porContaSku.set(chave, a);
     });
 
-    let total = 0, unidades = 0, anuncios = 0, foraDoAr = 0;
+    let total = 0, unidades = 0, anuncios = 0, foraDoAr = 0, foraDoArUn = 0;
     let semCusto = 0, unidadesSemCusto = 0, parado = 0, semGiro = 0, critico = 0;
     const skus = new Set();
     const semCustoLista = [], paradoLista = [];
@@ -2280,10 +2280,20 @@
       if (v.custo <= 0) { semCusto++; unidadesSemCusto += v.estoque; semCustoLista.push(v); return; }
 
       const valor = v.estoque * v.custo;
+
+      // ANÚNCIO EXCLUÍDO NÃO É CAPITAL. O Mercado Livre continua devolvendo
+      // estoque pra anúncio que saiu do ar, mas é resíduo de anúncio morto,
+      // não peça no depósito. Na conta 1 eram 2.518 unidades assim, 97% do
+      // total — contar isso seria inventar quase três mil peças.
+      if (!v.ativo) {
+        foraDoAr += valor;
+        foraDoArUn += v.estoque;
+        return;
+      }
+
       total += valor;
       unidades += v.estoque;
       anuncios++;
-      if (!v.ativo) foraDoAr += valor;
 
       // Parado: nada vendido em 90 dias (ou nunca vendeu)
       if (!v.ultimaVenda || v.ultimaVenda < limite90) { parado += valor; paradoLista.push(v); }
@@ -2296,8 +2306,8 @@
     semCustoLista.sort((a, b) => b.estoque - a.estoque);
     paradoLista.sort((a, b) => (b.estoque * b.custo) - (a.estoque * a.custo));
 
-    return componente_(total, "Mercado Livre · estoque × custo da aba Custos", null, {
-      unidades, anuncios, skus: skus.size, foraDoAr, parado, semGiro, critico,
+    return componente_(total, "Mercado Livre · anúncio no ar × custo", null, {
+      unidades, anuncios, skus: skus.size, foraDoAr, foraDoArUn, parado, semGiro, critico,
       semCusto, unidadesSemCusto, semCustoLista, paradoLista,
     });
   }
@@ -2501,6 +2511,7 @@
         <span class="muted" style="font-size:11px;">
           ${fmtNum(b.estoque.unidades)} un · ${b.estoque.skus} SKU · ${b.estoque.anuncios} anúncio(s)
           ${b.estoque.semCusto > 0 ? `<br>⚠ ${b.estoque.semCusto} sem custo, fora da conta` : ""}
+          ${b.estoque.foraDoArUn > 0 ? `<br>${fmtNum(b.estoque.foraDoArUn)} un em anúncio excluído — fora da conta` : ""}
         </span>
       </div>
 
