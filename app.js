@@ -104,6 +104,22 @@
     return Number(n).toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
   }
 
+  // Dinheiro COM centavos. Só é usado na Posição Financeira.
+  //
+  // No resto do site arredondar pra real inteiro é bom: ninguém precisa dos
+  // centavos do faturamento de 12 meses, e o número fica mais fácil de ler.
+  // Na Posição Financeira é o contrário — esse painel existe pra ser
+  // conferido contra o app do Mercado Pago, e R$ 4,96 virando "R$ 5" faz
+  // parecer que bate quando não bate (ou que não bate quando bate). Quem
+  // confere saldo confere centavo.
+  function fmtMoneyExato_(n) {
+    if (n === null || n === undefined || n === "") return "-";
+    return Number(n).toLocaleString("pt-BR", {
+      style: "currency", currency: "BRL",
+      minimumFractionDigits: 2, maximumFractionDigits: 2
+    });
+  }
+
   // ---------------------------------------------------------------- fetch
   async function fetchData() {
     const cfg = loadConfig();
@@ -2218,7 +2234,7 @@
   }
 
   function fmtValor_(c) {
-    return c.disponivel ? fmtMoney(c.valor) : "—";
+    return c.disponivel ? fmtMoneyExato_(c.valor) : "—";
   }
   function selo_(c) {
     if (!c.disponivel) {
@@ -2509,10 +2525,10 @@
       // parcelada não é problema de liquidez só por ser grande.
       const cobre = b.disponivel.valor + b.entra30;
       if (b.aPagar.disponivel && b.curtoPrazo > cobre) {
-        add("laranja", `Vence ${fmtMoney(b.curtoPrazo)} nos próximos 30 dias, e você tem ${fmtMoney(cobre)} entre caixa e recebíveis do período.`);
+        add("laranja", `Vence ${fmtMoneyExato_(b.curtoPrazo)} nos próximos 30 dias, e você tem ${fmtMoneyExato_(cobre)} entre caixa e recebíveis do período.`);
       }
       if (b.aPagar.disponivel && b.aPagar.balde.vencido > 0) {
-        add("vermelho", `${fmtMoney(b.aPagar.balde.vencido)} em contas VENCIDAS.`);
+        add("vermelho", `${fmtMoneyExato_(b.aPagar.balde.vencido)} em contas VENCIDAS.`);
       }
     }
 
@@ -2522,7 +2538,7 @@
     if (b.estoque.parado > 0) {
       const pct = b.estoque.valor > 0 ? b.estoque.parado / b.estoque.valor : 0;
       add(pct > 0.4 ? "laranja" : "amarelo",
-        `${fmtMoney(b.estoque.parado)} (${fmtPct(pct)}) em estoque sem venda há mais de 90 dias.`);
+        `${fmtMoneyExato_(b.estoque.parado)} (${fmtPct(pct)}) em estoque sem venda há mais de 90 dias.`);
     }
     if (b.estoque.critico > 0) {
       add("amarelo", `${b.estoque.critico} produto(s) com estoque para menos de 7 dias no ritmo atual.`);
@@ -2535,10 +2551,10 @@
     }
 
     if (b.aReceber.mediacao > 0) {
-      add("laranja", `${fmtMoney(b.aReceber.mediacao)} em ${b.aReceber.mediacaoItens} venda(s) em mediação — está contado no a receber, mas depende de ganhar a disputa.`);
+      add("laranja", `${fmtMoneyExato_(b.aReceber.mediacao)} em ${b.aReceber.mediacaoItens} venda(s) em mediação — está contado no a receber, mas depende de ganhar a disputa.`);
     }
     if (b.aReceber.retido > 0) {
-      add("laranja", `${fmtMoney(b.aReceber.retido)} em ${b.aReceber.retidoItens} pagamento(s) passaram da data de liberação e não caíram — entrega não confirmada, reclamação ou mediação.`);
+      add("laranja", `${fmtMoneyExato_(b.aReceber.retido)} em ${b.aReceber.retidoItens} pagamento(s) passaram da data de liberação e não caíram — entrega não confirmada, reclamação ou mediação.`);
     }
 
     // A pergunta que decide se uma dívida parcelada é sustentável não é
@@ -2549,14 +2565,14 @@
         const folga = d30.lucro - b.curtoPrazo;
         add(folga >= 0 ? "amarelo" : "vermelho",
           folga >= 0
-            ? `A parcela do mês (${fmtMoney(b.curtoPrazo)}) cabe no lucro dos últimos 30 dias (${fmtMoney(d30.lucro)}) — sobram ${fmtMoney(folga)}.`
-            : `A parcela do mês (${fmtMoney(b.curtoPrazo)}) é maior que o lucro dos últimos 30 dias (${fmtMoney(d30.lucro)}). Faltam ${fmtMoney(-folga)} por mês.`);
+            ? `A parcela do mês (${fmtMoneyExato_(b.curtoPrazo)}) cabe no lucro dos últimos 30 dias (${fmtMoneyExato_(d30.lucro)}) — sobram ${fmtMoneyExato_(folga)}.`
+            : `A parcela do mês (${fmtMoneyExato_(b.curtoPrazo)}) é maior que o lucro dos últimos 30 dias (${fmtMoneyExato_(d30.lucro)}). Faltam ${fmtMoneyExato_(-folga)} por mês.`);
       }
     }
 
     const rec = fpReconciliacao_(30);
     if (!rec.ok) {
-      add("vermelho", `${rec.semCorrespondencia} de ${rec.pedidos} pedidos dos últimos 30 dias não apareceram no Mercado Pago (${fmtMoney(rec.faturadoSemMp)}).`);
+      add("vermelho", `${rec.semCorrespondencia} de ${rec.pedidos} pedidos dos últimos 30 dias não apareceram no Mercado Pago (${fmtMoneyExato_(rec.faturadoSemMp)}).`);
     }
     return { lista: a, reconciliacao: rec };
   }
@@ -2596,10 +2612,10 @@
         <span class="fin-kpi__value">💳 ${fmtValor_(b.aReceber)}</span>
         <span class="fin-kpi__label">A receber</span>
         <span class="muted" style="font-size:11px;">
-          MP1 ${fmtMoney(b.aReceber.mp1)} · MP2 ${fmtMoney(b.aReceber.mp2)}${b.aReceber.outros > 0 ? " · outros " + fmtMoney(b.aReceber.outros) : ""}<br>
-          7d ${fmtMoney(b.aReceber.balde.hoje + b.aReceber.balde.ate7)} · 30d ${fmtMoney(b.aReceber.balde.ate30)} · depois ${fmtMoney(b.aReceber.balde.depois)}
-          ${b.aReceber.retido > 0 ? `<br><span style="color:#FFA857;">⚠ ${fmtMoney(b.aReceber.retido)} retido em ${b.aReceber.retidoItens} pagamento(s) — passou da data e não caiu</span>` : ""}
-          ${b.aReceber.mediacao > 0 ? `<br><span style="color:#FFA857;">⚠ ${fmtMoney(b.aReceber.mediacao)} em ${b.aReceber.mediacaoItens} venda(s) em disputa</span>` : ""}
+          MP1 ${fmtMoneyExato_(b.aReceber.mp1)} · MP2 ${fmtMoneyExato_(b.aReceber.mp2)}${b.aReceber.outros > 0 ? " · outros " + fmtMoneyExato_(b.aReceber.outros) : ""}<br>
+          7d ${fmtMoneyExato_(b.aReceber.balde.hoje + b.aReceber.balde.ate7)} · 30d ${fmtMoneyExato_(b.aReceber.balde.ate30)} · depois ${fmtMoneyExato_(b.aReceber.balde.depois)}
+          ${b.aReceber.retido > 0 ? `<br><span style="color:#FFA857;">⚠ ${fmtMoneyExato_(b.aReceber.retido)} retido em ${b.aReceber.retidoItens} pagamento(s) — passou da data e não caiu</span>` : ""}
+          ${b.aReceber.mediacao > 0 ? `<br><span style="color:#FFA857;">⚠ ${fmtMoneyExato_(b.aReceber.mediacao)} em ${b.aReceber.mediacaoItens} venda(s) em disputa</span>` : ""}
         </span>
       </div>
 
@@ -2617,7 +2633,7 @@
         <span class="fin-kpi__value">🔴 ${fmtValor_(b.aPagar)}</span>
         <span class="fin-kpi__label">A pagar</span>
         ${b.aPagar.disponivel ? `<span class="muted" style="font-size:11px;">
-          vencido ${fmtMoney(b.aPagar.balde.vencido)} · 7d ${fmtMoney(b.aPagar.balde.hoje + b.aPagar.balde.ate7)} · 30d ${fmtMoney(b.aPagar.balde.ate30)}
+          vencido ${fmtMoneyExato_(b.aPagar.balde.vencido)} · 7d ${fmtMoneyExato_(b.aPagar.balde.hoje + b.aPagar.balde.ate7)} · 30d ${fmtMoneyExato_(b.aPagar.balde.ate30)}
         </span>` : selo_(b.aPagar)}
       </div>
 
@@ -2625,31 +2641,31 @@
                   padding:14px 16px;background:rgba(255,255,255,0.03);border-radius:12px;">
         <div>
           <div class="muted" style="font-size:11px;">🏦 TOTAL DE ATIVOS</div>
-          <div style="font-size:20px;font-weight:600;">${fmtMoney(b.ativos)}</div>
+          <div style="font-size:20px;font-weight:600;">${fmtMoneyExato_(b.ativos)}</div>
           <div class="muted" style="font-size:11px;">disponível + a receber + estoque</div>
         </div>
         <div>
           <div class="muted" style="font-size:11px;">🔴 TOTAL DE PASSIVOS</div>
-          <div style="font-size:20px;font-weight:600;">${b.aPagar.disponivel ? fmtMoney(b.passivos) : "—"}</div>
+          <div style="font-size:20px;font-weight:600;">${b.aPagar.disponivel ? fmtMoneyExato_(b.passivos) : "—"}</div>
           <div class="muted" style="font-size:11px;">
-            ${fmtMoney(b.curtoPrazo)} em até 30 dias<br>
-            ${fmtMoney(b.longoPrazo)} parcelado adiante
+            ${fmtMoneyExato_(b.curtoPrazo)} em até 30 dias<br>
+            ${fmtMoneyExato_(b.longoPrazo)} parcelado adiante
           </div>
         </div>
         <div>
           <div class="muted" style="font-size:11px;">💎 PATRIMÔNIO LÍQUIDO</div>
           <div style="font-size:22px;font-weight:700;color:${b.patrimonio >= 0 ? "#5BE49B" : "#FF6B9D"};">
-            ${fmtMoney(b.patrimonio)}</div>
+            ${fmtMoneyExato_(b.patrimonio)}</div>
           <div class="muted" style="font-size:11px;">ativos − passivos${b.completo ? "" : " · incompleto"}
-            ${b.longoPrazo > 0 ? `<br>inclui ${fmtMoney(b.longoPrazo)} que só vence adiante` : ""}</div>
+            ${b.longoPrazo > 0 ? `<br>inclui ${fmtMoneyExato_(b.longoPrazo)} que só vence adiante` : ""}</div>
         </div>
         <div>
           <div class="muted" style="font-size:11px;">⚙ FOLGA EM 30 DIAS</div>
           <div style="font-size:20px;font-weight:600;color:${b.giro >= 0 ? "#5BE49B" : "#FF6B9D"};">
-            ${b.disponivel.disponivel || b.aReceber.disponivel ? fmtMoney(b.giro) : "—"}</div>
+            ${b.disponivel.disponivel || b.aReceber.disponivel ? fmtMoneyExato_(b.giro) : "—"}</div>
           <div class="muted" style="font-size:11px;">
-            entra ${fmtMoney(b.entra30)} · vence ${fmtMoney(b.curtoPrazo)}<br>
-            ${b.longoPrazo > 0 ? fmtMoney(b.longoPrazo) + " só depois de 30 dias" : "nada além de 30 dias"}
+            entra ${fmtMoneyExato_(b.entra30)} · vence ${fmtMoneyExato_(b.curtoPrazo)}<br>
+            ${b.longoPrazo > 0 ? fmtMoneyExato_(b.longoPrazo) + " só depois de 30 dias" : "nada além de 30 dias"}
           </div>
         </div>
       </div>
@@ -2674,7 +2690,7 @@
         }).join("")}
         <div style="display:flex;gap:10px;margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,0.08);">
           <span style="width:190px;font-size:13px;font-weight:600;">TOTAL</span>
-          <span style="width:110px;text-align:right;font-size:13px;font-weight:700;">${fmtMoney(totalOnde)}</span>
+          <span style="width:110px;text-align:right;font-size:13px;font-weight:700;">${fmtMoneyExato_(totalOnde)}</span>
           <span style="flex:1;"></span>
         </div>
       </div>
@@ -2682,7 +2698,7 @@
       <div style="grid-column:1/-1;display:flex;gap:16px;flex-wrap:wrap;font-size:12px;padding:0 4px;">
         <span>${rec.ok ? "🟢 CONCILIADO" : "🔴 DIVERGÊNCIA"}</span>
         <span class="muted">${rec.casados}/${rec.pedidos} pedidos dos últimos ${rec.dias} dias apareceram no Mercado Pago</span>
-        <span class="muted">ML ${fmtMoney(rec.faturadoMl)} → MP ${fmtMoney(rec.recebidoMp)} (a diferença é comissão e frete)</span>
+        <span class="muted">ML ${fmtMoneyExato_(rec.faturadoMl)} → MP ${fmtMoneyExato_(rec.recebidoMp)} (a diferença é comissão e frete)</span>
       </div>
 
       ${alertas.length ? `
