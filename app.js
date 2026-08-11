@@ -2369,8 +2369,27 @@
       ativos, passivos, patrimonio: ativos - passivos,
       completo: faltando.length === 0,
       faltando: faltando.map((c) => c.origem),
-      // Capital de giro: o que é líquido no curto prazo menos o que sai
-      giro: (disponivel.disponivel ? disponivel.valor : 0) + (aReceber.disponivel ? aReceber.valor : 0) - passivos,
+
+      // CAPITAL DE GIRO olha só os próximos 30 DIAS, não o passivo inteiro.
+      //
+      // Motivo: dívida parcelada não vence toda hoje. Um empréstimo em 9x
+      // aparece no passivo pelo valor cheio — e está certo, você deve tudo
+      // aquilo — mas comparar o total com o caixa de hoje responde a
+      // pergunta errada. A pergunta útil é: o que vence nos próximos 30
+      // dias cabe no que eu tenho mais o que entra nos próximos 30 dias?
+      //
+      // Antes, os R$ 15 mil de um empréstimo de 9 meses eram descontados
+      // como se vencessem amanhã. O giro parecia negativo sem motivo.
+      curtoPrazo: aPagar.disponivel
+        ? aPagar.balde.vencido + aPagar.balde.hoje + aPagar.balde.ate7 + aPagar.balde.ate30
+        : 0,
+      longoPrazo: aPagar.disponivel ? aPagar.balde.depois : 0,
+      entra30: aReceber.disponivel
+        ? aReceber.balde.hoje + aReceber.balde.ate7 + aReceber.balde.ate30
+        : 0,
+      giro: (disponivel.disponivel ? disponivel.valor : 0)
+          + (aReceber.disponivel ? (aReceber.balde.hoje + aReceber.balde.ate7 + aReceber.balde.ate30) : 0)
+          - (aPagar.disponivel ? (aPagar.balde.vencido + aPagar.balde.hoje + aPagar.balde.ate7 + aPagar.balde.ate30) : 0),
     };
   }
 
@@ -2427,8 +2446,11 @@
     if (!b.disponivel.disponivel) {
       add("vermelho", "Saldo do Mercado Pago não disponível pela API — o disponível não pode ser calculado.");
     } else {
-      if (b.aPagar.disponivel && b.aPagar.valor > b.disponivel.valor) {
-        add("laranja", `Contas a pagar (${fmtMoney(b.aPagar.valor)}) maiores que o dinheiro disponível (${fmtMoney(b.disponivel.valor)}).`);
+      // Compara o que VENCE em 30 dias, não o passivo inteiro. Dívida
+      // parcelada não é problema de liquidez só por ser grande.
+      const cobre = b.disponivel.valor + b.entra30;
+      if (b.aPagar.disponivel && b.curtoPrazo > cobre) {
+        add("laranja", `Vence ${fmtMoney(b.curtoPrazo)} nos próximos 30 dias, e você tem ${fmtMoney(cobre)} entre caixa e recebíveis do período.`);
       }
       if (b.aPagar.disponivel && b.aPagar.balde.vencido > 0) {
         add("vermelho", `${fmtMoney(b.aPagar.balde.vencido)} em contas VENCIDAS.`);
@@ -2455,6 +2477,19 @@
 
     if (b.aReceber.retido > 0) {
       add("laranja", `${fmtMoney(b.aReceber.retido)} em ${b.aReceber.retidoItens} pagamento(s) passaram da data de liberação e não caíram — entrega não confirmada, reclamação ou mediação.`);
+    }
+
+    // A pergunta que decide se uma dívida parcelada é sustentável não é
+    // "quanto devo", é "a parcela cabe no que eu ganho por mês".
+    if (b.aPagar.disponivel && b.curtoPrazo > 0) {
+      const d30 = calcularDre_({ modo: "30d", valor: "" });
+      if (d30.lucro > 0) {
+        const folga = d30.lucro - b.curtoPrazo;
+        add(folga >= 0 ? "amarelo" : "vermelho",
+          folga >= 0
+            ? `A parcela do mês (${fmtMoney(b.curtoPrazo)}) cabe no lucro dos últimos 30 dias (${fmtMoney(d30.lucro)}) — sobram ${fmtMoney(folga)}.`
+            : `A parcela do mês (${fmtMoney(b.curtoPrazo)}) é maior que o lucro dos últimos 30 dias (${fmtMoney(d30.lucro)}). Faltam ${fmtMoney(-folga)} por mês.`);
+      }
     }
 
     const rec = fpReconciliacao_(30);
@@ -2533,18 +2568,26 @@
         <div>
           <div class="muted" style="font-size:11px;">🔴 TOTAL DE PASSIVOS</div>
           <div style="font-size:20px;font-weight:600;">${b.aPagar.disponivel ? fmtMoney(b.passivos) : "—"}</div>
-          <div class="muted" style="font-size:11px;">contas a pagar em aberto</div>
+          <div class="muted" style="font-size:11px;">
+            ${fmtMoney(b.curtoPrazo)} em até 30 dias<br>
+            ${fmtMoney(b.longoPrazo)} parcelado adiante
+          </div>
         </div>
         <div>
           <div class="muted" style="font-size:11px;">💎 PATRIMÔNIO LÍQUIDO</div>
           <div style="font-size:22px;font-weight:700;color:${b.patrimonio >= 0 ? "#5BE49B" : "#FF6B9D"};">
             ${fmtMoney(b.patrimonio)}</div>
-          <div class="muted" style="font-size:11px;">ativos − passivos${b.completo ? "" : " · incompleto"}</div>
+          <div class="muted" style="font-size:11px;">ativos − passivos${b.completo ? "" : " · incompleto"}
+            ${b.longoPrazo > 0 ? `<br>inclui ${fmtMoney(b.longoPrazo)} que só vence adiante` : ""}</div>
         </div>
         <div>
-          <div class="muted" style="font-size:11px;">⚙ CAPITAL DE GIRO</div>
-          <div style="font-size:20px;font-weight:600;">${b.disponivel.disponivel ? fmtMoney(b.giro) : "—"}</div>
-          <div class="muted" style="font-size:11px;">disponível + a receber − a pagar</div>
+          <div class="muted" style="font-size:11px;">⚙ FOLGA EM 30 DIAS</div>
+          <div style="font-size:20px;font-weight:600;color:${b.giro >= 0 ? "#5BE49B" : "#FF6B9D"};">
+            ${b.disponivel.disponivel || b.aReceber.disponivel ? fmtMoney(b.giro) : "—"}</div>
+          <div class="muted" style="font-size:11px;">
+            entra ${fmtMoney(b.entra30)} · vence ${fmtMoney(b.curtoPrazo)}<br>
+            ${b.longoPrazo > 0 ? fmtMoney(b.longoPrazo) + " só depois de 30 dias" : "nada além de 30 dias"}
+          </div>
         </div>
       </div>
 
