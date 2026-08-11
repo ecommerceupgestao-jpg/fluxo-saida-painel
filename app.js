@@ -2221,9 +2221,17 @@
       else balde.depois += valor;
     };
 
-    let mp1 = 0, mp2 = 0;
+    // Separa o que tem data pra cair do que está TRAVADO.
+    //
+    // Pagamento cuja data de liberação já passou e mesmo assim não liberou
+    // não é "a receber" no mesmo sentido: é entrega não confirmada,
+    // reclamação ou mediação. Pode não cair nunca. Somar os dois esconde um
+    // problema de operação atrás de um número que parece saudável.
+    let mp1 = 0, mp2 = 0, retido = 0, retidoItens = 0;
     automaticos.forEach((r) => {
       const v = Number(r.valor || 0);
+      const venc = r.vencimento ? String(r.vencimento).slice(0, 10) : "";
+      if (venc && venc < hoje) { retido += v; retidoItens++; return; }
       if (r.contaMp === "1") mp1 += v; else mp2 += v;
       somar(r.vencimento, v);
     });
@@ -2231,8 +2239,8 @@
     manuais.forEach((c) => { const v = Number(c.valor || 0); outros += v; somar(c.vencimento, v); });
 
     const total = mp1 + mp2 + outros;
-    return componente_(total, "Mercado Pago · pagamentos aprovados ainda não liberados", null,
-      { mp1, mp2, outros, balde, itens: automaticos.length + manuais.length });
+    return componente_(total, "Mercado Pago · aprovado, com data pra liberar", null,
+      { mp1, mp2, outros, balde, retido, retidoItens, itens: automaticos.length + manuais.length });
   }
 
   // ---- 3. ESTOQUE a custo
@@ -2427,6 +2435,10 @@
       add("amarelo", "Contas a pagar sem lançamentos — o passivo e o patrimônio líquido estão incompletos.");
     }
 
+    if (b.aReceber.retido > 0) {
+      add("laranja", `${fmtMoney(b.aReceber.retido)} em ${b.aReceber.retidoItens} pagamento(s) passaram da data de liberação e não caíram — entrega não confirmada, reclamação ou mediação.`);
+    }
+
     const rec = fpReconciliacao_(30);
     if (!rec.ok) {
       add("vermelho", `${rec.semCorrespondencia} de ${rec.pedidos} pedidos dos últimos 30 dias não apareceram no Mercado Pago (${fmtMoney(rec.faturadoSemMp)}).`);
@@ -2471,6 +2483,7 @@
         <span class="muted" style="font-size:11px;">
           MP1 ${fmtMoney(b.aReceber.mp1)} · MP2 ${fmtMoney(b.aReceber.mp2)}${b.aReceber.outros > 0 ? " · outros " + fmtMoney(b.aReceber.outros) : ""}<br>
           7d ${fmtMoney(b.aReceber.balde.hoje + b.aReceber.balde.ate7)} · 30d ${fmtMoney(b.aReceber.balde.ate30)} · depois ${fmtMoney(b.aReceber.balde.depois)}
+          ${b.aReceber.retido > 0 ? `<br><span style="color:#FFA857;">⚠ ${fmtMoney(b.aReceber.retido)} retido em ${b.aReceber.retidoItens} pagamento(s) — passou da data e não caiu</span>` : ""}
         </span>
       </div>
 
