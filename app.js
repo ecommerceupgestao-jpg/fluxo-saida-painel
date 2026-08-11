@@ -2249,6 +2249,16 @@
     return `<span class="muted" style="font-size:11px;">${escapeHtml(c.origem)}${c.quando ? " · " + c.quando : ""}</span>`;
   }
 
+  // A nota vem da planilha com o prefixo técnico ("automático · relatório
+  // de liberações até 2026-08-11T14:07:34.000-03:00 ⚠ ..."). No card cabe
+  // pouco texto, e o que importa é a ressalva, não a procedência. Corta
+  // fora tudo antes do ⚠ e deixa o aviso.
+  function limparNota_(nota) {
+    const t = String(nota || "");
+    const i = t.indexOf("⚠");
+    return (i >= 0 ? t.slice(i + 1) : t).trim();
+  }
+
   // ---- 1. DINHEIRO DISPONÍVEL (só saldo do Mercado Pago)
   function fpDisponivel_() {
     // Distingue TRÊS situações que antes viravam a mesma mensagem:
@@ -2316,7 +2326,20 @@
         { parcial: true, faltando: faltando });
     }
 
+    // As duas contas foram lidas, mas alguma veio com ressalva do
+    // Mercado Pago — quitação em andamento, relatório atrasado, valor
+    // herdado da rodada anterior. O número é o melhor que existe, e ainda
+    // assim não é um saldo fechado. Mostrar os dois juntos (valor e
+    // ressalva) é o que evita a pessoa conferir contra o app, ver
+    // diferença e perder a confiança no painel inteiro por causa de um
+    // card.
     if (objeto) {
+      const comAlerta = lidas.filter((c) => c.alerta);
+      if (comAlerta.length) {
+        return componente_(saldo,
+          comAlerta.map((c) => "conta " + c.conta + ": " + limparNota_(c.nota)).join(" · "),
+          null, { parcial: true });
+      }
       return componente_(saldo, "saldo das " + lidas.length + " contas do Mercado Pago", null, { contas: lidas.length });
     }
 
