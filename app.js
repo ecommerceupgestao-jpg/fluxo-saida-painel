@@ -2190,6 +2190,14 @@
   // ---- 1. DINHEIRO DISPONÍVEL (só saldo do Mercado Pago)
   function fpDisponivel_() {
     const saldo = Number(state.saldo_mp || 0);
+    // Barreira contra número absurdo. Já aconteceu: uma coluna de DATA foi
+    // lida como dinheiro e o caixa virou R$ 3,5 trilhões. Um número desses
+    // num painel financeiro contamina tudo em volta — percentual,
+    // patrimônio, alertas — e é pior que não ter número nenhum.
+    if (!isFinite(saldo) || saldo < 0 || saldo > 1e11) {
+      return indisponivel_("Mercado Pago",
+        "O saldo veio com um valor impossível (" + saldo + "). Confira a aba Saldo MP na planilha.");
+    }
     if (saldo > 0) {
       return componente_(saldo, "saldo das 2 contas do Mercado Pago", null, { contas: 2 });
     }
