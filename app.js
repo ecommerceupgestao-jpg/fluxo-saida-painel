@@ -611,9 +611,20 @@
     const classe = {};
     let acumulado = 0;
     validos.forEach((i) => {
+      // A nota olha o acumulado ANTES deste item, não depois.
+      //
+      // Somando primeiro, o item que ATRAVESSA os 80% é jogado pra B, e o
+      // último item de qualquer lista sempre fecha em 100% e vira C. No
+      // caso extremo isso fica absurdo: um produto sozinho, dono de 100%
+      // do faturamento, era classificado como C — o pior da curva sendo o
+      // único que existe.
+      //
+      // A regra da curva ABC é "entram em A os produtos necessários pra
+      // chegar aos 80%", e o que atravessa a linha entra junto. Perguntar
+      // antes de somar é o que expressa isso.
+      const antes = total > 0 ? acumulado / total : 0;
+      classe[chaveDe(i)] = antes < 0.8 ? "A" : antes < 0.95 ? "B" : "C";
       acumulado += valorDe(i);
-      const p = total > 0 ? acumulado / total : 1;
-      classe[chaveDe(i)] = p <= 0.8 ? "A" : p <= 0.95 ? "B" : "C";
     });
     return classe;
   }
@@ -2011,7 +2022,20 @@
         cliente: "Mercado Livre (conta " + m.contaMp + ")",
         categoria: "Receita Marketplace",
         valor: valorLiquidoEfetivo_(m),
-        vencimento: m.data_liberacao || m.data || "",
+        // Sem data de liberação, o vencimento fica VAZIO — não cai pra
+        // m.data.
+        //
+        // m.data é o dia em que a venda aconteceu, não o dia em que o
+        // dinheiro cai. Usar uma no lugar da outra fazia um pagamento
+        // pendente sem previsão ser classificado como "entra hoje", que é
+        // a única coisa que ele com certeza não é: se caísse hoje, não
+        // estaria pendente. Esse dinheiro ia parar no capital de giro dos
+        // próximos 30 dias sem nenhuma garantia de chegar lá.
+        //
+        // Vazio manda pro balde "sem data", que fica fora do giro e
+        // continua contando como ativo — que é a verdade: o dinheiro é
+        // seu, só não se sabe quando chega.
+        vencimento: m.data_liberacao || "",
         status: "A receber",
         automatico: true,
         contaMp: m.contaMp,
@@ -2425,7 +2449,20 @@
     porContaSku.forEach((v) => {
       if (v.estoque <= 0) return;
       skus.add(v.sku);
-      if (v.custo <= 0) { semCusto++; unidadesSemCusto += v.estoque; semCustoLista.push(v); return; }
+
+      // Custo ausente e custo absurdo são o MESMO problema: nos dois casos
+      // não se sabe quanto a peça vale. A diferença é que o ausente se
+      // denuncia sozinho e o absurdo não — um custo digitado com zeros a
+      // mais entra calado e infla estoque, ativos e patrimônio de uma vez.
+      //
+      // O limite de R$ 1 milhão por unidade não é um palpite sobre o seu
+      // catálogo: é a fronteira do que pode ser erro de digitação. Se um
+      // dia você vender algo acima disso, o item aparece na lista de
+      // pendências pedindo conferência — visível, não descartado.
+      const CUSTO_MAXIMO_POR_UNIDADE = 1e6;
+      if (!isFinite(v.custo) || v.custo <= 0 || v.custo > CUSTO_MAXIMO_POR_UNIDADE) {
+        semCusto++; unidadesSemCusto += v.estoque; semCustoLista.push(v); return;
+      }
 
       const valor = v.estoque * v.custo;
 
@@ -2528,16 +2565,31 @@
       //
       // Antes, os R$ 15 mil de um empréstimo de 9 meses eram descontados
       // como se vencessem amanhã. O giro parecia negativo sem motivo.
+      // O balde "semData" entra no CURTO prazo, e isso não é detalhe.
+      //
+      // Antes ele não entrava em lugar nenhum: a conta aparecia no total de
+      // passivos, mas sumia na hora de calcular o giro. Curto + longo dava
+      // menos que o passivo, e a diferença era invisível. O efeito prático
+      // é sempre na mesma direção — o painel parece ter mais folga do que
+      // tem, que é o erro que ninguém percebe até faltar dinheiro.
+      //
+      // Sem saber quando vence, assumir que é já é o lado seguro: no
+      // máximo o giro fica pessimista, e pessimista a gente confere.
       curtoPrazo: aPagar.disponivel
-        ? aPagar.balde.vencido + aPagar.balde.hoje + aPagar.balde.ate7 + aPagar.balde.ate30
+        ? aPagar.balde.vencido + aPagar.balde.hoje + aPagar.balde.ate7 + aPagar.balde.ate30 + aPagar.balde.semData
         : 0,
       longoPrazo: aPagar.disponivel ? aPagar.balde.depois : 0,
       entra30: aReceber.disponivel
         ? aReceber.balde.hoje + aReceber.balde.ate7 + aReceber.balde.ate30
         : 0,
+      // Repare que os dois lados tratam "sem data" de formas OPOSTAS, e é
+      // de propósito. No que SAI, o sem data conta (pode vencer amanhã).
+      // No que ENTRA, o sem data não conta (pode não chegar este mês).
+      // As duas escolhas erram para o mesmo lado: o de não prometer folga
+      // que talvez não exista.
       giro: (disponivel.disponivel ? disponivel.valor : 0)
           + (aReceber.disponivel ? (aReceber.balde.hoje + aReceber.balde.ate7 + aReceber.balde.ate30) : 0)
-          - (aPagar.disponivel ? (aPagar.balde.vencido + aPagar.balde.hoje + aPagar.balde.ate7 + aPagar.balde.ate30) : 0),
+          - (aPagar.disponivel ? (aPagar.balde.vencido + aPagar.balde.hoje + aPagar.balde.ate7 + aPagar.balde.ate30 + aPagar.balde.semData) : 0),
     };
   }
 
