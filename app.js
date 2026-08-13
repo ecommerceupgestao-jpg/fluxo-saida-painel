@@ -1,6 +1,4 @@
-(function () {
-  "use strict";
-
+(() => {
   // Tema escuro: aplica cor clara nos textos/eixos de TODOS os gráficos de
   // uma vez, sem precisar repetir em cada configuração individual.
   if (window.Chart) {
@@ -30,7 +28,7 @@
     apiToken: document.getElementById("apiToken"),
   };
 
-  let state = {
+  const state = {
     produtos: [],
     saida_diaria: [],
     saida_mensal: [],
@@ -56,13 +54,343 @@
     capitalPeriodo: { modo: "hoje", valor: "" },
   };
 
-  let dailyChart, monthlyChart, financeiroChart;
+  let dailyChart, _monthlyChart, financeiroChart;
+
+  // ============================================================== MOTION
+  //
+  // Regras seguidas: design-motion-principles (Emil Kowalski, Jakub
+  // Krehel, Jhey Tompkins). O que elas mudam neste painel:
+  //
+  // O PORTÃO DA FREQUÊNCIA é a decisão mais importante aqui, e ele elimina
+  // quase tudo que "animar um dashboard" normalmente significa. A regra:
+  // motion raro pode ser expressivo, motion diário tem que ser sutil,
+  // motion que dispara centenas de vezes por dia não deve existir. Este
+  // painel chama fetchData a cada 60 segundos e redesenha tudo. Uma
+  // animação de entrada nos cards dispararia 60 vezes por hora, em cada
+  // aba aberta. Então: entrada acontece UMA vez, na primeira pintura de
+  // cada seção, e nunca mais. As atualizações seguintes trocam o número
+  // sem coreografia.
+  //
+  // Duração: abaixo de 300ms, 180ms como alvo — é UI de produtividade,
+  // não de deleite. Entrada com ease-out, saída com ease-in e mais
+  // discreta que a entrada (as pessoas olham pro que está chegando, não
+  // pro que está saindo).
+  //
+  // Anti-padrões evitados de propósito: nada pulsa (o ponto de sincronia
+  // usa opacidade fixa por estado, não respiração), nada tem blur na
+  // entrada, nenhuma lista ganha stagger "de brinde", nenhum spring com
+  // bounce em ação utilitária, e texto estático não anima — animação em
+  // parágrafo só atrasa a leitura.
+  //
+  // prefers-reduced-motion não é opcional: com ele ligado, tudo vira 0ms.
+  const Motion = (() => {
+    const CSS = `
+      :root {
+        --mo-rapido: 180ms;
+        --mo-medio: 240ms;
+        --mo-entrada: cubic-bezier(0.16, 1, 0.3, 1);
+        --mo-saida: cubic-bezier(0.4, 0, 1, 1);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        :root { --mo-rapido: 0ms; --mo-medio: 0ms; }
+        .mo-esqueleto::after { animation: none !important; }
+      }
+
+      /* Entrada: só na primeira pintura da seção. */
+      .mo-entra {
+        animation: moEntra var(--mo-medio) var(--mo-entrada) both;
+      }
+      @keyframes moEntra {
+        from { opacity: 0; transform: translateY(8px); }
+        to   { opacity: 1; transform: none; }
+      }
+
+      /* Saída mais discreta que a entrada, por princípio. */
+      .mo-sai {
+        animation: moSai var(--mo-rapido) var(--mo-saida) both;
+      }
+      @keyframes moSai {
+        from { opacity: 1; transform: none; }
+        to   { opacity: 0; transform: translateY(-4px); }
+      }
+
+      /* Valor que MUDOU. Não é enfeite: serve pra localizar o que mexeu
+         numa tela que se atualiza sozinha. Por isso só dispara quando o
+         texto realmente mudou — se disparasse sempre, viraria ruído e
+         deixaria de informar. */
+      .mo-mudou { animation: moMudou var(--mo-rapido) var(--mo-entrada) both; }
+      @keyframes moMudou {
+        from { opacity: 0.35; transform: translateY(2px); }
+        to   { opacity: 1; transform: none; }
+      }
+
+      /* Esqueleto: forma da tela antes do conteúdo, pra não haver salto de
+         layout quando os dados chegam. O brilho é linear e contínuo —
+         carregamento é progresso, não batimento. */
+      .mo-esqueleto {
+        position: relative;
+        overflow: hidden;
+        border-radius: 10px;
+        background: rgba(255,255,255,0.04);
+        min-height: 74px;
+      }
+      .mo-esqueleto::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        transform: translateX(-100%);
+        background: linear-gradient(90deg,
+          transparent, rgba(255,255,255,0.06), transparent);
+        animation: moBrilho 1.1s linear infinite;
+      }
+      @keyframes moBrilho { to { transform: translateX(100%); } }
+
+      /* Barra de progresso do carregamento. Indeterminada porque a gente
+         não sabe quanto falta — fingir uma porcentagem seria inventar
+         dado, que é justamente o que este painel não faz. */
+      #moProgresso {
+        position: fixed; top: 0; left: 0; right: 0; height: 2px;
+        background: transparent; z-index: 9999; pointer-events: none;
+        opacity: 0; transition: opacity var(--mo-rapido) linear;
+      }
+      #moProgresso.ativo { opacity: 1; }
+      #moProgresso::before {
+        content: ""; position: absolute; top: 0; bottom: 0; width: 34%;
+        background: linear-gradient(90deg, transparent, #5B8DEF, transparent);
+        animation: moCorre 1s linear infinite;
+      }
+      @keyframes moCorre {
+        from { left: -34%; } to { left: 100%; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #moProgresso::before { animation: none; width: 100%; opacity: 0.5; }
+      }
+
+      /* Pressionar responde na hora. 150-200ms em hover é o que separa
+         interface polida de interface parada. */
+      .mo-toque { transition: transform 150ms var(--mo-entrada); }
+      .mo-toque:active { transform: scale(0.97); }
+    `;
+
+    let instalado = false;
+    const jaEntrou = new Set();
+    const ultimoTexto = new Map();
+
+    function instalar() {
+      if (instalado || typeof document === "undefined" || !document.head) return;
+      const tag = document.createElement("style");
+      tag.id = "moEstilos";
+      tag.textContent = CSS;
+      document.head.appendChild(tag);
+
+      // Reaproveita a barra se ela já existir no HTML.
+      //
+      // Criar sem olhar dava DUAS barras: uma do index.html e outra
+      // daqui, empilhadas, e a segunda nunca recebia a classe "ativo" —
+      // então metade das vezes o progresso simplesmente não aparecia,
+      // dependendo de qual das duas o getElementById encontrasse
+      // primeiro. Bug clássico de elemento auto-instalado.
+      if (!document.getElementById("moProgresso")) {
+        const barra = document.createElement("div");
+        barra.id = "moProgresso";
+        document.body?.appendChild(barra);
+      }
+      instalado = true;
+    }
+
+    function reduzido() {
+      try {
+        return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+      } catch (_e) {
+        return false;
+      }
+    }
+
+    return {
+      instalar,
+      reduzido,
+
+      /** Entrada só na PRIMEIRA vez que esta seção aparece. */
+      entrada(el, chave) {
+        if (!el || !chave || jaEntrou.has(chave) || reduzido()) return;
+        jaEntrou.add(chave);
+        el.classList.add("mo-entra");
+        el.addEventListener("animationend", () => el.classList.remove("mo-entra"), { once: true });
+      },
+
+      /** Marca visualmente um valor que mudou desde a última pintura. */
+      valorMudou(el, chave) {
+        if (!el || !chave) return;
+        const agora = el.textContent || "";
+        const antes = ultimoTexto.get(chave);
+        ultimoTexto.set(chave, agora);
+        if (antes === undefined || antes === agora || reduzido()) return;
+        el.classList.remove("mo-mudou");
+        void el.offsetWidth; // reinicia a animação
+        el.classList.add("mo-mudou");
+      },
+
+      progresso(ligado) {
+        instalar();
+        document.getElementById("moProgresso")?.classList.toggle("ativo", !!ligado);
+      },
+
+      /** Blocos cinza no formato dos cards, enquanto os dados não chegam. */
+      esqueleto(container, quantos) {
+        if (!container) return;
+        instalar();
+        container.innerHTML = Array.from({ length: quantos || 4 })
+          .map(() => `<div class="mo-esqueleto" aria-hidden="true"></div>`)
+          .join("");
+      },
+
+      /** Já apareceu alguma vez? Usado pra decidir esqueleto vs conteúdo. */
+      primeiraVez(chave) {
+        return !jaEntrou.has(chave);
+      },
+    };
+  })();
+
+  // ========================================================= TELEMETRIA
+  //
+  // Um ponto de saída só, para qualquer provedor.
+  //
+  // O pedido era Sentry, Datadog, New Relic e OpenTelemetry. Instalar os
+  // quatro num site estático de um arquivo seria mais peso de agente do
+  // que o painel inteiro, e três deles exigem conta paga e chave que
+  // ninguém tem hoje. Então o que existe aqui é a COSTURA: todo erro,
+  // toda falha de rede e todo tempo de render passam por
+  // Telemetria.erro / Telemetria.evento. Ligar um provedor é preencher o
+  // enviar() — não é reescrever o painel.
+  //
+  // O Sentry já vem ligado por padrão, porque é o único que funciona só
+  // com um script e uma DSN, e é o que resolve o problema de verdade:
+  // hoje, se o painel quebrar no navegador de alguém, ninguém fica
+  // sabendo. Sem DSN configurada ele fica quieto e guarda tudo na memória
+  // pra você ver com tekoDebug().
+  //
+  // Como ligar: Configurações → campo "DSN do Sentry", ou no console:
+  //     localStorage.setItem("teko_sentry_dsn", "https://…@…ingest.sentry.io/…")
+  const Telemetria = (() => {
+    const memoria = [];
+    const MAX = 50;
+    let sentryPronto = false;
+
+    function dsn() {
+      try {
+        return localStorage.getItem("teko_sentry_dsn") || "";
+      } catch (_e) {
+        return "";
+      }
+    }
+
+    function carregarSentry() {
+      const d = dsn();
+      if (!d || sentryPronto || typeof document === "undefined") return;
+      const s = document.createElement("script");
+      s.src = "https://browser.sentry-cdn.com/8.42.0/bundle.tracing.min.js";
+      s.crossOrigin = "anonymous";
+      s.onload = () => {
+        try {
+          window.Sentry?.init({
+            dsn: d,
+            tracesSampleRate: 0.1,
+            // O painel mostra dinheiro. Nada de corpo de requisição nem
+            // de valores nos breadcrumbs — o que interessa pra depurar é
+            // ONDE quebrou, não quanto o cliente tem em caixa.
+            sendDefaultPii: false,
+            beforeSend(evento) {
+              if (evento.request) evento.request.data = undefined;
+              return evento;
+            },
+          });
+          sentryPronto = true;
+        } catch (e) {
+          console.warn("[telemetria] Sentry não iniciou:", e.message);
+        }
+      };
+      s.onerror = () => console.warn("[telemetria] não consegui baixar o Sentry");
+      document.head.appendChild(s);
+    }
+
+    function enviar(tipo, dados) {
+      memoria.push({ tipo, ...dados, quando: new Date().toISOString() });
+      if (memoria.length > MAX) memoria.shift();
+
+      // Sentry, quando configurado.
+      if (sentryPronto && window.Sentry) {
+        if (tipo === "erro") window.Sentry.captureException(dados.erro || new Error(dados.mensagem));
+        else window.Sentry.addBreadcrumb({ category: "teko", message: dados.nome, data: dados.dados });
+      }
+
+      // Ponto de extensão. Um coletor de OpenTelemetry, o agente do
+      // Datadog ou o do New Relic entram aqui, sem tocar em mais nada:
+      //   window.tekoColetor = (tipo, dados) => { ... }
+      try {
+        window.tekoColetor?.(tipo, dados);
+      } catch (_e) {
+        /* um coletor quebrado não pode derrubar o painel */
+      }
+    }
+
+    return {
+      iniciar() {
+        carregarSentry();
+        if (typeof window === "undefined") return;
+
+        // Erro solto na página. Sem isto, um erro de render deixa a tela
+        // pela metade e não sobra rastro nenhum.
+        window.addEventListener?.("error", (e) => {
+          enviar("erro", { mensagem: e.message, arquivo: e.filename, linha: e.lineno, erro: e.error });
+        });
+        window.addEventListener?.("unhandledrejection", (e) => {
+          enviar("erro", {
+            mensagem: "promessa rejeitada: " + (e.reason?.message || e.reason),
+            erro: e.reason,
+          });
+        });
+      },
+
+      erro(erro, contexto) {
+        enviar("erro", { mensagem: erro?.message || String(erro), erro, ...contexto });
+        return erro;
+      },
+
+      evento(nome, dados) {
+        enviar("evento", { nome, dados });
+      },
+
+      /**
+       * Mede quanto tempo uma parte do painel leva pra desenhar.
+       *
+       * Não é vaidade: com 1.700 SKUs, uma tabela que passa de 300ms
+       * trava a rolagem, e isso só aparece na máquina de quem usa. Medir
+       * é a única forma de descobrir sem estar lá.
+       */
+      medir(nome, fn) {
+        const t0 = typeof performance !== "undefined" ? performance.now() : 0;
+        try {
+          return fn();
+        } catch (e) {
+          this.erro(e, { onde: nome });
+          throw e;
+        } finally {
+          const ms = (typeof performance !== "undefined" ? performance.now() : 0) - t0;
+          if (ms > 250) enviar("lento", { nome, ms: Math.round(ms) });
+        }
+      },
+
+      historico() {
+        return memoria.slice();
+      },
+    };
+  })();
 
   function loadConfig() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) return JSON.parse(raw);
-    } catch (e) {}
+    } catch (_e) {}
     return window.DEFAULT_CONFIG || { apiUrl: "", apiToken: "" };
   }
 
@@ -85,9 +413,17 @@
   }
 
   function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-    }[c]));
+    return String(s).replace(
+      /[&<>"']/g,
+      (c) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[c]
+    );
   }
 
   function fmtNum(n) {
@@ -101,7 +437,11 @@
 
   function fmtMoney(n) {
     if (n === null || n === undefined || n === "") return "-";
-    return Number(n).toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+    return Number(n).toLocaleString("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+      maximumFractionDigits: 0,
+    });
   }
 
   // Dinheiro COM centavos. Só é usado na Posição Financeira.
@@ -115,8 +455,10 @@
   function fmtMoneyExato_(n) {
     if (n === null || n === undefined || n === "") return "-";
     return Number(n).toLocaleString("pt-BR", {
-      style: "currency", currency: "BRL",
-      minimumFractionDigits: 2, maximumFractionDigits: 2
+      style: "currency",
+      currency: "BRL",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
     });
   }
 
@@ -128,8 +470,19 @@
       return;
     }
     setSyncStatus("carregando", null);
+    // Barra de progresso no topo enquanto a chamada está em voo. Sem
+    // isto, o painel fica parado por 1 a 3 segundos e não há como saber
+    // se está buscando ou se travou.
+    Motion.progresso(true);
+    // Esqueleto só na PRIMEIRA carga. Nas atualizações de 60 em 60
+    // segundos já existe conteúdo na tela, e trocá-lo por blocos cinza
+    // seria piscar informação boa fora à toa.
+    if (Motion.primeiraVez("capital")) {
+      Motion.esqueleto(document.getElementById("capitalEmpresaRow"), 4);
+    }
     try {
-      const url = cfg.apiUrl + (cfg.apiUrl.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(cfg.apiToken);
+      const url =
+        cfg.apiUrl + (cfg.apiUrl.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(cfg.apiToken);
       const resp = await fetch(url);
       const data = await resp.json();
       if (data.error) throw new Error(data.error);
@@ -148,12 +501,13 @@
       // Guarda o que veio da API pra dar pra inspecionar no console do
       // navegador sem precisar de ferramenta nenhuma:
       //     tekoDebug()
-      window.tekoDebug = function () {
+      window.tekoDebug = () => {
         const campos = Object.keys(data).sort();
         console.log("Campos recebidos da API:", campos);
         console.log("saldo_mp está na resposta?", campos.indexOf("saldo_mp") >= 0);
         console.log("valor de saldo_mp:", data.saldo_mp);
         console.log("gerado em:", data.gerado_em);
+        console.log("telemetria (últimos eventos):", Telemetria.historico());
         return data;
       };
       state.contas_pagar = data.contas_pagar || [];
@@ -173,7 +527,9 @@
       // Junta o Faturamento/Lucro em R$ (da Curva ABC) em cada produto,
       // pra mostrar valor real ao lado da nota A/B/C.
       const abcBySku = {};
-      state.curva_abc.forEach((c) => { abcBySku[c["SKU"]] = c; });
+      state.curva_abc.forEach((c) => {
+        abcBySku[c["SKU"]] = c;
+      });
       state.produtos.forEach((p) => {
         const c = abcBySku[p["SKUs"]];
         p["_fat_rs"] = c ? Number(c["Faturamento 12M"] || 0) : 0;
@@ -191,6 +547,13 @@
     } catch (err) {
       console.error(err);
       setSyncStatus("erro", null);
+      Telemetria.erro(err, { onde: "fetchData", url: cfg.apiUrl });
+    } finally {
+      // finally, não no fim do try: se a chamada falhar, a barra tem que
+      // sumir do mesmo jeito. Barra de progresso que fica girando pra
+      // sempre depois de um erro é pior que não ter barra — ela diz
+      // "ainda estou tentando" quando já desistiu.
+      Motion.progresso(false);
     }
   }
 
@@ -217,8 +580,12 @@
 
   // ---------------------------------------------------------------- render
   function render() {
-    if (!state.produtos.length) { showEmpty(); return; }
+    if (!state.produtos.length) {
+      showEmpty();
+      return;
+    }
     showDashboard();
+    Motion.instalar();
     renderHero();
     renderAcoesHoje();
     renderMeta();
@@ -240,7 +607,8 @@
 
   function popularSelectsComparativo_() {
     const meses = state.financeiro_mensal;
-    const selA = document.getElementById("mesASelect"), selB = document.getElementById("mesBSelect");
+    const selA = document.getElementById("mesASelect"),
+      selB = document.getElementById("mesBSelect");
     if (!meses.length) return;
 
     // Antes, as opções usavam o ÍNDICE do array como valor e só eram
@@ -252,8 +620,11 @@
     // selecionado de fato apontava. Agora a chave é a DATA do período
     // (estável, não muda de significado com o tempo) e as opções são
     // sempre recriadas, preservando a seleção atual quando ela ainda existir.
-    const valorAtualA = selA.value, valorAtualB = selB.value;
-    const opts = meses.map((m) => `<option value="${m.periodo}">${fmtMesLabel_(m.periodo)}</option>`).join("");
+    const valorAtualA = selA.value,
+      valorAtualB = selB.value;
+    const opts = meses
+      .map((m) => `<option value="${m.periodo}">${fmtMesLabel_(m.periodo)}</option>`)
+      .join("");
     selA.innerHTML = opts;
     selB.innerHTML = opts;
 
@@ -300,18 +671,20 @@
       { label: "Margem", a: mesA.margem, b: mesB.margem, tipo: "pct" },
     ];
 
-    document.getElementById("comparativoBody").innerHTML = linhas.map((l) => {
-      const fmt = l.tipo === "money" ? fmtMoney : fmtPct;
-      const variacao = l.a ? ((l.b - l.a) / Math.abs(l.a)) * 100 : (l.b ? 100 : 0);
-      const cls = variacao > 0.5 ? "up" : variacao < -0.5 ? "down" : "";
-      const seta = variacao > 0.5 ? "▲" : variacao < -0.5 ? "▼" : "•";
-      return `<tr>
+    document.getElementById("comparativoBody").innerHTML = linhas
+      .map((l) => {
+        const fmt = l.tipo === "money" ? fmtMoney : fmtPct;
+        const variacao = l.a ? ((l.b - l.a) / Math.abs(l.a)) * 100 : l.b ? 100 : 0;
+        const cls = variacao > 0.5 ? "up" : variacao < -0.5 ? "down" : "";
+        const seta = variacao > 0.5 ? "▲" : variacao < -0.5 ? "▼" : "•";
+        return `<tr>
         <td>${l.label}</td>
         <td class="num">${fmt(l.a)}</td>
         <td class="num">${fmt(l.b)}</td>
         <td class="num ${cls}">${seta} ${Math.abs(variacao).toFixed(0)}%</td>
       </tr>`;
-    }).join("");
+      })
+      .join("");
   }
 
   function isoDate_(d) {
@@ -322,26 +695,51 @@
   // dentro de Produtos, e o novo, dentro de Hoje) usa o mesmo motor —
   // só muda o conjunto de IDs e o preset inicial.
   const PERIODO_PICKERS = [
-    { presetsId: "periodoPresets", deId: "dataDe", ateId: "dataAte", resumoId: "periodoResumo", bodyId: "diaBody", presetInicial: "ontem" },
-    { presetsId: "hojePeriodoPresets", deId: "hojeDataDe", ateId: "hojeDataAte", resumoId: "hojePeriodoResumo", bodyId: "hojeDiaBody", presetInicial: "hoje" },
+    {
+      presetsId: "periodoPresets",
+      deId: "dataDe",
+      ateId: "dataAte",
+      resumoId: "periodoResumo",
+      bodyId: "diaBody",
+      presetInicial: "ontem",
+    },
+    {
+      presetsId: "hojePeriodoPresets",
+      deId: "hojeDataDe",
+      ateId: "hojeDataAte",
+      resumoId: "hojePeriodoResumo",
+      bodyId: "hojeDiaBody",
+      presetInicial: "hoje",
+    },
   ];
 
   function aplicarPresetPeriodo_(cfg, preset) {
     const hoje = new Date();
-    const de = document.getElementById(cfg.deId), ate = document.getElementById(cfg.ateId);
-    if (preset === "hoje") { de.value = isoDate_(hoje); ate.value = isoDate_(hoje); }
+    const de = document.getElementById(cfg.deId),
+      ate = document.getElementById(cfg.ateId);
+    if (preset === "hoje") {
+      de.value = isoDate_(hoje);
+      ate.value = isoDate_(hoje);
+    }
     if (preset === "ontem") {
-      const o = new Date(hoje); o.setDate(o.getDate() - 1);
-      de.value = isoDate_(o); ate.value = isoDate_(o);
+      const o = new Date(hoje);
+      o.setDate(o.getDate() - 1);
+      de.value = isoDate_(o);
+      ate.value = isoDate_(o);
     }
     if (preset === "7dias") {
-      const seteAtras = new Date(hoje); seteAtras.setDate(seteAtras.getDate() - 6);
-      de.value = isoDate_(seteAtras); ate.value = isoDate_(hoje);
+      const seteAtras = new Date(hoje);
+      seteAtras.setDate(seteAtras.getDate() - 6);
+      de.value = isoDate_(seteAtras);
+      ate.value = isoDate_(hoje);
     }
     if (preset === "mes") {
-      de.value = isoDate_(new Date(hoje.getFullYear(), hoje.getMonth(), 1)); ate.value = isoDate_(hoje);
+      de.value = isoDate_(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+      ate.value = isoDate_(hoje);
     }
-    document.querySelectorAll(`#${cfg.presetsId} .preset-btn`).forEach((b) => b.classList.toggle("active", b.dataset.preset === preset));
+    document
+      .querySelectorAll(`#${cfg.presetsId} .preset-btn`)
+      .forEach((b) => b.classList.toggle("active", b.dataset.preset === preset));
   }
 
   function initPeriodoPickers_() {
@@ -355,11 +753,15 @@
         renderVendasPorProduto_(cfg);
       });
       document.getElementById(cfg.deId).addEventListener("change", () => {
-        document.querySelectorAll(`#${cfg.presetsId} .preset-btn`).forEach((b) => b.classList.remove("active"));
+        document
+          .querySelectorAll(`#${cfg.presetsId} .preset-btn`)
+          .forEach((b) => b.classList.remove("active"));
         renderVendasPorProduto_(cfg);
       });
       document.getElementById(cfg.ateId).addEventListener("change", () => {
-        document.querySelectorAll(`#${cfg.presetsId} .preset-btn`).forEach((b) => b.classList.remove("active"));
+        document
+          .querySelectorAll(`#${cfg.presetsId} .preset-btn`)
+          .forEach((b) => b.classList.remove("active"));
         renderVendasPorProduto_(cfg);
       });
     });
@@ -374,7 +776,9 @@
     const ate = document.getElementById(cfg.ateId).value;
     if (!de || !ate) return;
 
-    const fotoPorSku = {}, linkPorSku = {}, fornecedorPorSku = {};
+    const fotoPorSku = {},
+      linkPorSku = {},
+      fornecedorPorSku = {};
     state.produtos.forEach((p) => {
       fotoPorSku[p["SKUs"]] = p["Foto URL"];
       linkPorSku[p["SKUs"]] = p["Link Anúncio"];
@@ -388,7 +792,8 @@
 
     const grupos = {};
     noPeriodo.forEach((t) => {
-      if (!grupos[t.sku]) grupos[t.sku] = { sku: t.sku, fornecedor: fornecedorPorSku[t.sku], qtd: 0, faturamento: 0 };
+      if (!grupos[t.sku])
+        grupos[t.sku] = { sku: t.sku, fornecedor: fornecedorPorSku[t.sku], qtd: 0, faturamento: 0 };
       grupos[t.sku].qtd += Number(t.quantidade) || 0;
       grupos[t.sku].faturamento += Number(t.faturamento) || 0;
     });
@@ -411,14 +816,18 @@
       body.innerHTML = `<tr><td colspan="5" class="muted" style="text-align:center;padding:16px;">Nenhuma venda nesse período.</td></tr>`;
       return;
     }
-    body.innerHTML = linhas.map((l) => `
+    body.innerHTML = linhas
+      .map(
+        (l) => `
       <tr>
         <td>${fmtFoto(fotoPorSku[l.sku])}</td>
         <td>${fmtSkuLink(l.sku, linkPorSku[l.sku])}</td>
         <td>${escapeHtml(l.fornecedor ?? "-")}</td>
         <td class="num">${fmtNum(l.qtd)}</td>
         <td class="num">${fmtMoney(l.faturamento)}</td>
-      </tr>`).join("");
+      </tr>`
+      )
+      .join("");
   }
 
   // Percentual do preço de venda que NÃO fica com a gente: comissão do
@@ -427,7 +836,9 @@
   // tem histórico próprio. Não inclui o custo do produto — o custo entra
   // separado, senão seria contado duas vezes.
   function taxaFreteMediaGeral_() {
-    let fat = 0, taxa = 0, frete = 0;
+    let fat = 0,
+      taxa = 0,
+      frete = 0;
     (state.linhasProdutosPorConta || []).forEach((p) => {
       fat += Number(p.fat12m || 0);
       taxa += Number(p.taxa12m || 0);
@@ -444,68 +855,84 @@
     const fat = Number(p.fat12m || 0);
     if (fat <= 0) return mediaGeral;
     const r = (Number(p.taxa12m || 0) + Number(p.frete12m || 0)) / fat;
-    if (!isFinite(r) || r < 0) return mediaGeral;
+    if (!Number.isFinite(r) || r < 0) return mediaGeral;
     return Math.min(r, 0.95);
   }
 
   function renderEstoque() {
     const somenteSemCusto = document.getElementById("semCustoFiltro").checked;
     const apenasComEstoque = document.getElementById("apenasComEstoqueFiltro").checked;
-    let totalParado = 0, totalPotencial = 0, totalLucroPotencial = 0;
+    let totalParado = 0,
+      totalPotencial = 0,
+      totalLucroPotencial = 0;
     const taxaFreteMedia = taxaFreteMediaGeral_();
     // Usa as linhas POR CONTA (mesmas da "Lista completa de produtos") —
     // se o mesmo SKU existir nas duas contas, cada uma aparece com seu
     // próprio estoque/preço/custo, sem somar uma na outra. Antes, usar o
     // SKU combinado fazia o preço/estoque de uma conta "vazar" pra métrica
     // da outra.
-    let linhas = (state.linhasProdutosPorConta || []).map((p) => {
-      const estoque = p.estoque;
-      const custo = p.custo;
-      const preco = p.precoAtual;
-      const precoOriginal = p.precoOriginal;
-      // LUCRO REAL: o que sobra no bolso vendendo HOJE, no preço de hoje.
-      //
-      // Regra da casa (RAW_Vendas): Lucro = Faturamento − Custo − Taxa ML −
-      // Frete. Ou seja, o "lucro" do histórico JÁ está líquido de custo.
-      // Por isso aqui a gente usa só a fatia de taxa+frete do histórico e
-      // desconta o custo UMA vez, com o custo de hoje:
-      //
-      //   recebido por unidade = preço − (preço × taxa+frete%)
-      //   lucro por unidade     = recebido − custo
-      //
-      // A % de taxa+frete vem das vendas reais DESTE anúncio nos últimos 12
-      // meses (então já embute comissão, frete grátis, tipo de anúncio); se
-      // ele nunca vendeu, usa a média real da casa.
-      const taxaFrete = taxaFreteDoProduto_(p, taxaFreteMedia);
-      const recebidoPorUnidade = preco * (1 - taxaFrete);
-      const lucroPorUnidade = recebidoPorUnidade - custo;
-      // Margem mostrada na tabela = margem líquida de verdade sobre o preço.
-      const margemReal = preco > 0 ? lucroPorUnidade / preco : 0;
+    let linhas = (state.linhasProdutosPorConta || [])
+      .map((p) => {
+        const estoque = p.estoque;
+        const custo = p.custo;
+        const preco = p.precoAtual;
+        const precoOriginal = p.precoOriginal;
+        // LUCRO REAL: o que sobra no bolso vendendo HOJE, no preço de hoje.
+        //
+        // Regra da casa (RAW_Vendas): Lucro = Faturamento − Custo − Taxa ML −
+        // Frete. Ou seja, o "lucro" do histórico JÁ está líquido de custo.
+        // Por isso aqui a gente usa só a fatia de taxa+frete do histórico e
+        // desconta o custo UMA vez, com o custo de hoje:
+        //
+        //   recebido por unidade = preço − (preço × taxa+frete%)
+        //   lucro por unidade     = recebido − custo
+        //
+        // A % de taxa+frete vem das vendas reais DESTE anúncio nos últimos 12
+        // meses (então já embute comissão, frete grátis, tipo de anúncio); se
+        // ele nunca vendeu, usa a média real da casa.
+        const taxaFrete = taxaFreteDoProduto_(p, taxaFreteMedia);
+        const recebidoPorUnidade = preco * (1 - taxaFrete);
+        const lucroPorUnidade = recebidoPorUnidade - custo;
+        // Margem mostrada na tabela = margem líquida de verdade sobre o preço.
+        const margemReal = preco > 0 ? lucroPorUnidade / preco : 0;
 
-      const valorParado = estoque * custo;
-      const valorPotencial = estoque * preco;
-      // Sem Math.max(0, ...): se o produto dá prejuízo no preço atual, o
-      // número tem que aparecer negativo. Esconder isso é justamente o que
-      // fazia a conta parecer boa quando não era.
-      const lucroPotencial = estoque * lucroPorUnidade;
-      // Os 3 indicadores do topo SEMPRE consideram só quem tem estoque de
-      // verdade (> 0) E custo preenchido (> 0) — produto sem custo
-      // cadastrado normalmente é um anúncio ainda não revisado/cadastrado
-      // corretamente, e o "estoque" que o Mercado Livre reporta pra ele às
-      // vezes não é confiável (ex: anúncio antigo, teste, ou duplicado).
-      // Isso é sempre assim, independente do checkbox "só com estoque"
-      // abaixo, que só controla o que aparece NA LISTA.
-      if (estoque > 0 && custo > 0) {
-        totalParado += valorParado;
-        totalPotencial += valorPotencial;
-        totalLucroPotencial += lucroPotencial;
-      }
-      return {
-        sku: p.sku, conta: p.conta, titulo: p.titulo, foto: p.foto, link: p.link,
-        estoque, custo, valorParado, preco, precoOriginal, margem: margemReal, lucroPotencial,
-        taxaFrete, recebidoPorUnidade, semHistorico: !(Number(p.fat12m) > 0),
-      };
-    }).sort((a, b) => b.valorParado - a.valorParado);
+        const valorParado = estoque * custo;
+        const valorPotencial = estoque * preco;
+        // Sem Math.max(0, ...): se o produto dá prejuízo no preço atual, o
+        // número tem que aparecer negativo. Esconder isso é justamente o que
+        // fazia a conta parecer boa quando não era.
+        const lucroPotencial = estoque * lucroPorUnidade;
+        // Os 3 indicadores do topo SEMPRE consideram só quem tem estoque de
+        // verdade (> 0) E custo preenchido (> 0) — produto sem custo
+        // cadastrado normalmente é um anúncio ainda não revisado/cadastrado
+        // corretamente, e o "estoque" que o Mercado Livre reporta pra ele às
+        // vezes não é confiável (ex: anúncio antigo, teste, ou duplicado).
+        // Isso é sempre assim, independente do checkbox "só com estoque"
+        // abaixo, que só controla o que aparece NA LISTA.
+        if (estoque > 0 && custo > 0) {
+          totalParado += valorParado;
+          totalPotencial += valorPotencial;
+          totalLucroPotencial += lucroPotencial;
+        }
+        return {
+          sku: p.sku,
+          conta: p.conta,
+          titulo: p.titulo,
+          foto: p.foto,
+          link: p.link,
+          estoque,
+          custo,
+          valorParado,
+          preco,
+          precoOriginal,
+          margem: margemReal,
+          lucroPotencial,
+          taxaFrete,
+          recebidoPorUnidade,
+          semHistorico: !(Number(p.fat12m) > 0),
+        };
+      })
+      .sort((a, b) => b.valorParado - a.valorParado);
 
     document.getElementById("estoqueKpiRow").innerHTML = `
       <div class="fin-kpi">
@@ -530,7 +957,9 @@
     else linhas = linhas.filter((l) => l.custo > 0);
     if (apenasComEstoque) linhas = linhas.filter((l) => l.estoque > 0);
 
-    document.getElementById("estoqueBody").innerHTML = linhas.map((l) => `
+    document.getElementById("estoqueBody").innerHTML = linhas
+      .map(
+        (l) => `
       <tr>
         <td>${fmtFoto(l.foto)}</td>
         <td>${fmtSkuLink(l.sku, l.link)}</td>
@@ -545,7 +974,9 @@
         <td class="num">${fmtPrecoComPromo(l.precoOriginal, l.preco)}</td>
         <td class="num">${fmtPct(l.margem)}</td>
         <td class="num">${fmtMoney(l.lucroPotencial)}</td>
-      </tr>`).join("");
+      </tr>`
+      )
+      .join("");
 
     document.querySelectorAll(".custo-edit").forEach((input) => {
       input.addEventListener("change", () => salvarCusto_(input));
@@ -583,9 +1014,11 @@
       // compartilhada), então atualiza toda linha que tiver esse SKU.
       const produto = state.produtos.find((p) => p["SKUs"] === sku);
       if (produto) produto["Custo Unitário"] = custo;
-      (state.linhasProdutosPorConta || []).forEach((l) => { if (l.sku === sku) l.custo = custo; });
+      (state.linhasProdutosPorConta || []).forEach((l) => {
+        if (l.sku === sku) l.custo = custo;
+      });
       renderEstoque();
-    } catch (err) {
+    } catch (_err) {
       msg.textContent = "✗ erro ao salvar";
       msg.className = "custo-save-msg erro";
     } finally {
@@ -605,8 +1038,7 @@
   // negativo fica de fora (não classifica), senão a cauda vira uma massa
   // de zeros que distorce os cortes.
   function classificarAbc_(itens, valorDe, chaveDe) {
-    const validos = itens.filter((i) => valorDe(i) > 0)
-      .sort((a, b) => valorDe(b) - valorDe(a));
+    const validos = itens.filter((i) => valorDe(i) > 0).sort((a, b) => valorDe(b) - valorDe(a));
     const total = validos.reduce((s, i) => s + valorDe(i), 0);
     const classe = {};
     let acumulado = 0;
@@ -648,10 +1080,13 @@
   //             mediana — aqui um ajuste de preço rende
   //   Potencial tem A ou B em alguma das três, sem se encaixar acima
   //   Análise   C em tudo, ou sem venda nos 12 meses
-  const PERFIL_ORDEM = { "Estrela": 1, "Premium": 2, "Volume": 3, "Potencial": 4, "Análise": 5 };
+  const PERFIL_ORDEM = { Estrela: 1, Premium: 2, Volume: 3, Potencial: 4, Análise: 5 };
 
   function medianaMargem_(itens) {
-    const ms = itens.filter((i) => i.fat12m > 0).map((i) => i.lucro12m / i.fat12m).sort((a, b) => a - b);
+    const ms = itens
+      .filter((i) => i.fat12m > 0)
+      .map((i) => i.lucro12m / i.fat12m)
+      .sort((a, b) => a - b);
     if (!ms.length) return 0;
     const meio = Math.floor(ms.length / 2);
     return ms.length % 2 ? ms[meio] : (ms[meio - 1] + ms[meio]) / 2;
@@ -680,9 +1115,19 @@
     const porSku = new Map();
     (state.linhasProdutosPorConta || []).forEach((p) => {
       const a = porSku.get(p.sku) || {
-        sku: p.sku, titulo: p.titulo, fornecedor: p.fornecedor, categoria: p.categoria,
-        foto: p.foto, link: p.link,
-        fat12m: 0, lucro12m: 0, qtd12m: 0, qtd30: 0, estoque: 0, custo: 0, inativo: true,
+        sku: p.sku,
+        titulo: p.titulo,
+        fornecedor: p.fornecedor,
+        categoria: p.categoria,
+        foto: p.foto,
+        link: p.link,
+        fat12m: 0,
+        lucro12m: 0,
+        qtd12m: 0,
+        qtd30: 0,
+        estoque: 0,
+        custo: 0,
+        inativo: true,
       };
       a.fat12m += Number(p.fat12m || 0);
       a.lucro12m += Number(p.lucro12m || 0);
@@ -697,18 +1142,18 @@
 
     const itens = Array.from(porSku.values());
     const chave = (i) => i.sku;
-    const cFat   = classificarAbc_(itens, (i) => i.fat12m,   chave);
+    const cFat = classificarAbc_(itens, (i) => i.fat12m, chave);
     const cLucro = classificarAbc_(itens, (i) => i.lucro12m, chave);
-    const cQtd   = classificarAbc_(itens, (i) => i.qtd12m,   chave);
+    const cQtd = classificarAbc_(itens, (i) => i.qtd12m, chave);
     // Curva do giro ATUAL (últimos 30 dias) — é a que mostra o que está
     // vendendo agora, não o que vendeu no ano passado.
     const cAtual = classificarAbc_(itens, (i) => i.qtd30, chave);
 
     const margemMediana = medianaMargem_(itens);
     itens.forEach((i) => {
-      i.classeFat   = cFat[i.sku]   || "";
+      i.classeFat = cFat[i.sku] || "";
       i.classeLucro = cLucro[i.sku] || "";
-      i.classeQtd   = cQtd[i.sku]   || "";
+      i.classeQtd = cQtd[i.sku] || "";
       i.classeAtual = cAtual[i.sku] || "";
       i.margem = i.fat12m > 0 ? i.lucro12m / i.fat12m : 0;
       i.perfil = perfilProduto_(i.classeFat, i.classeLucro, i.classeQtd, i.margem, margemMediana);
@@ -739,11 +1184,11 @@
 
     const PERFIS = ["Estrela", "Premium", "Volume", "Potencial", "Análise"];
     const EXPLICA = {
-      "Estrela":   "vende muito e dá lucro",
-      "Premium":   "gira pouco, cada venda vale muito",
-      "Volume":    "gira muito, margem apertada",
-      "Potencial": "perto de subir de faixa",
-      "Análise":   "revisar se vale continuar",
+      Estrela: "vende muito e dá lucro",
+      Premium: "gira pouco, cada venda vale muito",
+      Volume: "gira muito, margem apertada",
+      Potencial: "perto de subir de faixa",
+      Análise: "revisar se vale continuar",
     };
 
     const cards = PERFIS.map((perfil) => {
@@ -763,7 +1208,10 @@
         </div>`;
     }).join("");
 
-    const linhas = itens.slice(0, 200).map((i) => `
+    const linhas = itens
+      .slice(0, 200)
+      .map(
+        (i) => `
       <tr>
         <td>${fmtFoto(i.foto)}</td>
         <td>${fmtSkuLink(i.sku, i.link)}</td>
@@ -779,7 +1227,9 @@
         <td class="num">${fmtNum(i.qtd30)}</td>
         <td class="num">${fmtNum(i.estoque)}</td>
         <td class="num">${i.diasEstoque === null ? "-" : fmtNum(i.diasEstoque)}</td>
-      </tr>`).join("");
+      </tr>`
+      )
+      .join("");
 
     el.innerHTML = `
       ${cards}
@@ -811,8 +1261,16 @@
   }
 
   function badgePerfil_(p) {
-    const cls = p === "Estrela" ? "foco" : p === "Premium" ? "manutencao"
-              : p === "Volume" ? "baixo" : p === "Potencial" ? "despriorizado" : "ignorar";
+    const cls =
+      p === "Estrela"
+        ? "foco"
+        : p === "Premium"
+          ? "manutencao"
+          : p === "Volume"
+            ? "baixo"
+            : p === "Potencial"
+              ? "despriorizado"
+              : "ignorar";
     return `<span class="badge badge--${cls}">${escapeHtml(p)}</span>`;
   }
 
@@ -831,12 +1289,15 @@
       return;
     }
 
-    tbody.innerHTML = candidatos.map((p) => {
-      const dias = Number(p["Dias até Ruptura"]);
-      const urgencia = dias <= 7 ? "saida" : dias <= 15 ? "despriorizado" : "manutencao";
-      const previsao = p["Previsão de Ruptura"] ? new Date(p["Previsão de Ruptura"]).toLocaleDateString("pt-BR") : "-";
-      const velocidadeDia = (Number(p["Últimos 15 dias"] || 0) / 15).toFixed(1);
-      return `<tr>
+    tbody.innerHTML = candidatos
+      .map((p) => {
+        const dias = Number(p["Dias até Ruptura"]);
+        const urgencia = dias <= 7 ? "saida" : dias <= 15 ? "despriorizado" : "manutencao";
+        const previsao = p["Previsão de Ruptura"]
+          ? new Date(p["Previsão de Ruptura"]).toLocaleDateString("pt-BR")
+          : "-";
+        const velocidadeDia = (Number(p["Últimos 15 dias"] || 0) / 15).toFixed(1);
+        return `<tr>
         <td class="sku-cell">${escapeHtml(p["SKUs"])}</td>
         <td>${escapeHtml(p["Fornecedor"] ?? "-")}</td>
         <td class="num">${fmtNum(p["Estoque AnyMarket disponível"])}</td>
@@ -844,7 +1305,8 @@
         <td class="num"><span class="badge badge--${urgencia}">${dias}d</span></td>
         <td>${previsao}</td>
       </tr>`;
-    }).join("");
+      })
+      .join("");
   }
 
   function renderFilters() {
@@ -885,7 +1347,9 @@
     // Custo, Classificação e DIRETRIZ continuam vindo do SKU combinado
     // (Fluxo por SKU) — é a mesma peça física e a mesma classificação
     // estratégica, então não faz sentido duplicar isso por conta.
-    const custoPorSku = {}, diretrizPorSku = {}, classifPorSku = {};
+    const custoPorSku = {},
+      diretrizPorSku = {},
+      classifPorSku = {};
     state.produtos.forEach((p) => {
       custoPorSku[p["SKUs"]] = Number(p["Custo Unitário"] || 0);
       diretrizPorSku[p["SKUs"]] = p["DIRETRIZ"];
@@ -893,18 +1357,26 @@
     });
 
     const hojeIso = isoDate_(new Date());
-    const ontemD = new Date(); ontemD.setDate(ontemD.getDate() - 1);
+    const ontemD = new Date();
+    ontemD.setDate(ontemD.getDate() - 1);
     const ontemIso = isoDate_(ontemD);
 
     function metricas_(sku, porSkuMap) {
       const doSku = porSkuMap[sku] || [];
       const somaDesde = (dias, campo) => {
-        const limite = new Date(); limite.setDate(limite.getDate() - dias);
+        const limite = new Date();
+        limite.setDate(limite.getDate() - dias);
         const limiteIso = isoDate_(limite);
-        return doSku.filter((t) => (t.data || "") >= limiteIso).reduce((s, t) => s + Number(t[campo] || 0), 0);
+        return doSku
+          .filter((t) => (t.data || "") >= limiteIso)
+          .reduce((s, t) => s + Number(t[campo] || 0), 0);
       };
-      const somaExata = (diaIso, campo) => doSku.filter((t) => t.data === diaIso).reduce((s, t) => s + Number(t[campo] || 0), 0);
-      const datas = doSku.map((t) => t.data).filter(Boolean).sort();
+      const somaExata = (diaIso, campo) =>
+        doSku.filter((t) => t.data === diaIso).reduce((s, t) => s + Number(t[campo] || 0), 0);
+      const datas = doSku
+        .map((t) => t.data)
+        .filter(Boolean)
+        .sort();
 
       return {
         qtdHoje: somaExata(hojeIso, "quantidade"),
@@ -947,34 +1419,51 @@
       const met = metricas_(sku, porSkuMap);
       const mediaVendasDia = met.qtd30 / 30;
       const diasRestantes = mediaVendasDia > 0 ? estoque / mediaVendasDia : null;
-      const evolucao30 = met.qtdPrev30 > 0 ? (met.qtd30 - met.qtdPrev30) / met.qtdPrev30 : (met.qtd30 > 0 ? 1 : 0);
+      const evolucao30 =
+        met.qtdPrev30 > 0 ? (met.qtd30 - met.qtdPrev30) / met.qtdPrev30 : met.qtd30 > 0 ? 1 : 0;
       const sit = situacao_(estoque, mediaVendasDia, met.ultimaVenda);
       // Velocidade dos últimos 15 dias, mesmo critério já usado em "Fluxo
       // por SKU" pra prever ruptura — só que agora calculado por conta.
       const vel15 = met.qtd15 / 15;
-      const diasRuptura = vel15 > 0 ? Math.round(estoque / vel15) : (estoque > 0 ? null : 0);
+      const diasRuptura = vel15 > 0 ? Math.round(estoque / vel15) : estoque > 0 ? null : 0;
 
       return {
-        sku, conta, fornecedor: raw.fornecedor, categoria: raw.categoria, foto: raw.foto, link: raw.link,
+        sku,
+        conta,
+        fornecedor: raw.fornecedor,
+        categoria: raw.categoria,
+        foto: raw.foto,
+        link: raw.link,
         titulo: raw.titulo || "",
         // Anúncio que saiu do ar. O WebApp.gs já mandava esse campo (coluna
         // G de RAW_Estoque) e ninguém usava — era por isso que o site somava
         // no capital produto que a planilha já tinha excluído.
         inativo: !!raw.inativo,
-        estoque, reserva: Number(raw.reserva || 0),
-        precoOriginal: Number(raw.preco_original || 0), precoAtual: Number(raw.preco_atual || 0),
+        estoque,
+        reserva: Number(raw.reserva || 0),
+        precoOriginal: Number(raw.preco_original || 0),
+        precoAtual: Number(raw.preco_atual || 0),
         custo,
-        qtdHoje: met.qtdHoje, qtdOntem: met.qtdOntem, qtd7: met.qtd7, qtd15: met.qtd15, qtd30: met.qtd30,
+        qtdHoje: met.qtdHoje,
+        qtdOntem: met.qtdOntem,
+        qtd7: met.qtd7,
+        qtd15: met.qtd15,
+        qtd30: met.qtd30,
         evolucao30,
         mediaVendasDia,
         diasRestantes,
         diasRestantesOrdenacao: diasRestantes === null ? (estoque > 0 ? 999999 : -1) : diasRestantes,
         ultimaVenda: met.ultimaVenda,
         ultimaVendaOrdenacao: met.ultimaVenda ? new Date(met.ultimaVenda).getTime() : -1,
-        fat12m: met.fat12m, lucro12m: met.lucro12m,
-        custo12m: met.custo12m, taxa12m: met.taxa12m, frete12m: met.frete12m, qtd12m: met.qtd12m,
+        fat12m: met.fat12m,
+        lucro12m: met.lucro12m,
+        custo12m: met.custo12m,
+        taxa12m: met.taxa12m,
+        frete12m: met.frete12m,
+        qtd12m: met.qtd12m,
         margem: met.fat12m ? met.lucro12m / met.fat12m : 0,
-        situacao: sit, situacaoOrdenacao: sit.texto,
+        situacao: sit,
+        situacaoOrdenacao: sit.texto,
         diasRuptura,
         diasRupturaOrdenacao: diasRuptura === null ? (estoque > 0 ? 999999 : -1) : diasRuptura,
         classificacao: classifPorSku[sku] || "-",
@@ -982,9 +1471,14 @@
       };
     }
 
-    const porSku1 = {}, porSku2 = {};
-    state.transacoes.forEach((t) => { (porSku1[t.sku] = porSku1[t.sku] || []).push(t); });
-    state.transacoes_2.forEach((t) => { (porSku2[t.sku] = porSku2[t.sku] || []).push(t); });
+    const porSku1 = {},
+      porSku2 = {};
+    state.transacoes.forEach((t) => {
+      (porSku1[t.sku] = porSku1[t.sku] || []).push(t);
+    });
+    state.transacoes_2.forEach((t) => {
+      (porSku2[t.sku] = porSku2[t.sku] || []).push(t);
+    });
 
     const linhas = [];
     (state.produtos_conta1_raw || []).forEach((raw) => linhas.push(construirConta_(raw, "1", porSku1)));
@@ -996,7 +1490,8 @@
     if (!iso) return "Nunca vendeu";
     const hoje = isoDate_(new Date());
     if (iso === hoje) return "Hoje";
-    const ontemD = new Date(); ontemD.setDate(ontemD.getDate() - 1);
+    const ontemD = new Date();
+    ontemD.setDate(ontemD.getDate() - 1);
     if (iso === isoDate_(ontemD)) return "Ontem";
     const dias = Math.round((new Date(hoje + "T12:00:00") - new Date(iso + "T12:00:00")) / 86400000);
     return `Há ${dias} dias`;
@@ -1008,7 +1503,9 @@
 
   function fmtDiasRestantes_(dias, estoque) {
     if (dias === null || dias === undefined) {
-      return estoque > 0 ? `<span class="badge badge--ignorar">-</span>` : `<span class="badge badge--saida">0d</span>`;
+      return estoque > 0
+        ? `<span class="badge badge--ignorar">-</span>`
+        : `<span class="badge badge--saida">0d</span>`;
     }
     const n = Math.round(dias);
     const classe = n <= 3 ? "saida" : n <= 10 ? "baixo" : n <= 30 ? "despriorizado" : "manutencao";
@@ -1021,7 +1518,7 @@
 
   function filteredSortedProducts() {
     const term = state.search.trim().toLowerCase();
-    let rows = (state.linhasProdutosPorConta || []).filter((p) => {
+    const rows = (state.linhasProdutosPorConta || []).filter((p) => {
       if (term) {
         const hay = `${p.sku ?? ""} ${p.fornecedor ?? ""} ${p.categoria ?? ""}`.toLowerCase();
         if (!hay.includes(term)) return false;
@@ -1031,10 +1528,12 @@
       return true;
     });
     rows.sort((a, b) => {
-      const av = a[state.sortKey], bv = b[state.sortKey];
-      const an = Number(av), bn = Number(bv);
+      const av = a[state.sortKey],
+        bv = b[state.sortKey];
+      const an = Number(av),
+        bn = Number(bv);
       let cmp;
-      if (!isNaN(an) && !isNaN(bn) && av !== "" && bv !== "") cmp = an - bn;
+      if (!Number.isNaN(an) && !Number.isNaN(bn) && av !== "" && bv !== "") cmp = an - bn;
       else cmp = String(av ?? "").localeCompare(String(bv ?? ""));
       return state.sortDir === "asc" ? cmp : -cmp;
     });
@@ -1076,21 +1575,13 @@
   // Selo minimalista mostrando de qual conta do Mercado Livre o produto
   // vem — "1", "2", ou as duas pontinhas juntas quando ele é vendido nas
   // duas. Quando tem link do anúncio da conta 2, o "2" já é clicável.
-  function fmtContaBadge(contas, linkConta2) {
-    if (!contas) return "";
-    if (contas === "1 + 2") {
-      return `<span class="conta-badge conta-badge--1">1</span>` +
-        (linkConta2
-          ? `<a href="${linkConta2}" target="_blank" rel="noopener" class="conta-badge conta-badge--2">2</a>`
-          : `<span class="conta-badge conta-badge--2">2</span>`);
-    }
-    return `<span class="conta-badge conta-badge--${contas}">${contas}</span>`;
-  }
 
   function renderTable() {
     const rows = filteredSortedProducts();
     els.rowCount.textContent = `(${rows.length})`;
-    els.productsBody.innerHTML = rows.map((p, i) => `
+    els.productsBody.innerHTML = rows
+      .map(
+        (p, i) => `
       <tr class="data-row" data-idx="${i}">
         <td>${fmtFoto(p.foto)}</td>
         <td>${fmtSkuLink(p.sku, p.link)}</td>
@@ -1116,7 +1607,9 @@
         <td>${fmtSituacao_(p.situacao)}</td>
         <td>${badge(p.classificacao, "classif")}</td>
         <td>${badge(p.diretriz)}</td>
-      </tr>`).join("");
+      </tr>`
+      )
+      .join("");
 
     els.productsBody.querySelectorAll(".data-row").forEach((tr) => {
       tr.addEventListener("click", () => toggleRowDetail(tr, rows[Number(tr.dataset.idx)]));
@@ -1125,7 +1618,10 @@
 
   function toggleRowDetail(tr, product) {
     const next = tr.nextElementSibling;
-    if (next && next.classList.contains("row-detail")) { next.remove(); return; }
+    if (next && next.classList.contains("row-detail")) {
+      next.remove();
+      return;
+    }
     document.querySelectorAll(".row-detail").forEach((n) => n.remove());
 
     const tpl = document.getElementById("rowDetailTemplate").content.cloneNode(true);
@@ -1135,24 +1631,39 @@
 
     const serie = (state.saida_diaria.find((d) => d.sku === product.sku) || {}).serie || [];
     if (typeof Chart === "undefined") {
-      canvas.insertAdjacentHTML("afterend", `<p class="chart-erro">⚠️ Biblioteca de gráficos não carregou — recarregue a página.</p>`);
+      canvas.insertAdjacentHTML(
+        "afterend",
+        `<p class="chart-erro">⚠️ Biblioteca de gráficos não carregou — recarregue a página.</p>`
+      );
       return;
     }
     new Chart(canvas, {
       type: "line",
       data: {
         labels: serie.map((s) => (s.periodo || "").slice(5)),
-        datasets: [{
-          data: serie.map((s) => s.quantidade),
-          borderColor: "#5B9CFF", backgroundColor: "rgba(91,156,255,0.12)",
-          fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2,
-        }],
+        datasets: [
+          {
+            data: serie.map((s) => s.quantidade),
+            borderColor: "#5B9CFF",
+            backgroundColor: "rgba(91,156,255,0.12)",
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            borderWidth: 2,
+          },
+        ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false }, title: { display: true, text: `Saída diária — ${product.sku}`, font: { size: 11 } } },
-        scales: { x: { ticks: { font: { size: 9 } } }, y: { ticks: { font: { size: 9 } }, beginAtZero: true } },
+        plugins: {
+          legend: { display: false },
+          title: { display: true, text: `Saída diária — ${product.sku}`, font: { size: 11 } },
+        },
+        scales: {
+          x: { ticks: { font: { size: 9 } } },
+          y: { ticks: { font: { size: 9 } }, beginAtZero: true },
+        },
       },
     });
   }
@@ -1165,8 +1676,10 @@
     if (typeof Chart !== "undefined") return true;
     const canvas = document.getElementById(canvasId);
     if (canvas && canvas.parentElement && !canvas.parentElement.querySelector(".chart-erro")) {
-      canvas.parentElement.insertAdjacentHTML("beforeend",
-        `<p class="chart-erro">⚠️ Não foi possível carregar a biblioteca de gráficos (conexão lenta ou bloqueada). <button type="button" onclick="location.reload()" class="btn btn--ghost" style="margin-left:6px;">Recarregar página</button></p>`);
+      canvas.parentElement.insertAdjacentHTML(
+        "beforeend",
+        `<p class="chart-erro">⚠️ Não foi possível carregar a biblioteca de gráficos (conexão lenta ou bloqueada). <button type="button" onclick="location.reload()" class="btn btn--ghost" style="margin-left:6px;">Recarregar página</button></p>`
+      );
     }
     return false;
   }
@@ -1180,13 +1693,16 @@
     let labels, values;
     if (state.periodoView === "mes") {
       const m = aggregateSeries(state.saida_mensal);
-      labels = m.labels; values = m.values;
+      labels = m.labels;
+      values = m.values;
     } else if (state.periodoView === "semana") {
       const w = aggregateSemanal_(state.saida_diaria);
-      labels = w.labels; values = w.values;
+      labels = w.labels;
+      values = w.values;
     } else {
       const d = aggregateSeries(state.saida_diaria);
-      labels = d.labels; values = d.values;
+      labels = d.labels;
+      values = d.values;
     }
     if (dailyChart) dailyChart.destroy();
     dailyChart = new Chart(document.getElementById("dailyChart"), {
@@ -1202,9 +1718,14 @@
     if (!saidaDiaria.length) return { labels: [], values: [] };
     const nDias = saidaDiaria[0].serie.length;
     const totalPorDia = new Array(nDias).fill(0);
-    saidaDiaria.forEach((item) => item.serie.forEach((s, i) => { totalPorDia[i] += Number(s.quantidade) || 0; }));
+    saidaDiaria.forEach((item) =>
+      item.serie.forEach((s, i) => {
+        totalPorDia[i] += Number(s.quantidade) || 0;
+      })
+    );
 
-    const labels = [], values = [];
+    const labels = [],
+      values = [];
     for (let inicio = 0; inicio < nDias; inicio += 7) {
       const fim = Math.min(inicio + 7, nDias);
       const soma = totalPorDia.slice(inicio, fim).reduce((s, v) => s + v, 0);
@@ -1221,7 +1742,10 @@
       responsive: true,
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
-      scales: { x: { ticks: { font: { size: 10 } } }, y: { beginAtZero: true, ticks: { font: { size: 10 } } } },
+      scales: {
+        x: { ticks: { font: { size: 10 } } },
+        y: { beginAtZero: true, ticks: { font: { size: 10 } } },
+      },
     };
   }
 
@@ -1230,7 +1754,11 @@
     const nPeriods = list[0].serie.length;
     const labels = list[0].serie.map((s) => (s.periodo || "").slice(2));
     const values = new Array(nPeriods).fill(0);
-    list.forEach((item) => item.serie.forEach((s, i) => { values[i] += Number(s.quantidade) || 0; }));
+    list.forEach((item) =>
+      item.serie.forEach((s, i) => {
+        values[i] += Number(s.quantidade) || 0;
+      })
+    );
     return { labels, values };
   }
 
@@ -1251,7 +1779,9 @@
   }
 
   function transacoesDoMes_(yyyyMM, conta) {
-    return transacoesPorConta_(conta || state.contaFinanceiro).filter((t) => (t.data || "").slice(0, 7) === yyyyMM);
+    return transacoesPorConta_(conta || state.contaFinanceiro).filter(
+      (t) => (t.data || "").slice(0, 7) === yyyyMM
+    );
   }
 
   function devolucoesPorConta_(conta) {
@@ -1264,8 +1794,9 @@
   // revertido depois — "Cancelamento" (nunca entregue) não entra na taxa
   // de devolução, mas fica registrado do mesmo jeito em RAW_Cancelados.
   function devolucoesDoMes_(yyyyMM, conta) {
-    return devolucoesPorConta_(conta || state.contaFinanceiro)
-      .filter((d) => (d.data || "").slice(0, 7) === yyyyMM && d.tipo === "Devolução");
+    return devolucoesPorConta_(conta || state.contaFinanceiro).filter(
+      (d) => (d.data || "").slice(0, 7) === yyyyMM && d.tipo === "Devolução"
+    );
   }
 
   function totaisFinanceiroMes_(yyyyMM, conta) {
@@ -1291,12 +1822,15 @@
   // lista de transações — usado tanto pro mês inteiro quanto pra um único
   // dia, pra não duplicar essa conta duas vezes.
   function agregarFinanceiro_(txs, devolucoes) {
-    const base = txs.reduce((acc, t) => ({
-      faturamento: acc.faturamento + Number(t.faturamento || 0),
-      custo: acc.custo + Number(t.custo || 0),
-      taxa: acc.taxa + Number(t.taxa_ml || 0),
-      frete: acc.frete + Number(t.frete || 0),
-    }), { faturamento: 0, custo: 0, taxa: 0, frete: 0 });
+    const base = txs.reduce(
+      (acc, t) => ({
+        faturamento: acc.faturamento + Number(t.faturamento || 0),
+        custo: acc.custo + Number(t.custo || 0),
+        taxa: acc.taxa + Number(t.taxa_ml || 0),
+        frete: acc.frete + Number(t.frete || 0),
+      }),
+      { faturamento: 0, custo: 0, taxa: 0, frete: 0 }
+    );
 
     const pedidosPagos = new Set(txs.map((t) => t.pedido_id).filter(Boolean));
     const pedidosDevolvidos = new Set(devolucoes.map((d) => d.pedido_id).filter(Boolean));
@@ -1323,8 +1857,9 @@
   }
 
   function devolucoesDoDiaFin_(isoDia, conta) {
-    return devolucoesPorConta_(conta || state.contaFinanceiro)
-      .filter((d) => (d.data || "") === isoDia && d.tipo === "Devolução");
+    return devolucoesPorConta_(conta || state.contaFinanceiro).filter(
+      (d) => (d.data || "") === isoDia && d.tipo === "Devolução"
+    );
   }
 
   function totaisFinanceiroDia_(isoDia, conta) {
@@ -1424,7 +1959,7 @@
   }
 
   function fmtDelta_(pct) {
-    if (pct === null || pct === undefined || !isFinite(pct)) return "";
+    if (pct === null || pct === undefined || !Number.isFinite(pct)) return "";
     const seta = pct >= 0 ? "▲" : "▼";
     const classe = pct >= 0 ? "up" : "down";
     return ` <span class="fin-kpi__delta fin-kpi__delta--${classe}">${seta} ${Math.abs(pct * 100).toFixed(0)}% vs mês anterior</span>`;
@@ -1492,21 +2027,29 @@
       tituloPeriodo = fmtDiaLabel_(state.diaFinanceiro);
       const divisor = diasMesAnterior || 1;
       refFaturamento = totaisMesAnterior.faturamento / divisor;
-      refSaidas = (totaisMesAnterior.custo + totaisMesAnterior.taxa + totaisMesAnterior.frete + totaisMesAnterior.ads) / divisor;
+      refSaidas =
+        (totaisMesAnterior.custo + totaisMesAnterior.taxa + totaisMesAnterior.frete + totaisMesAnterior.ads) /
+        divisor;
       refLucro = totaisMesAnterior.lucro / divisor;
-      refMargem = totaisMesAnterior.faturamento ? totaisMesAnterior.lucro / totaisMesAnterior.faturamento : null;
+      refMargem = totaisMesAnterior.faturamento
+        ? totaisMesAnterior.lucro / totaisMesAnterior.faturamento
+        : null;
     } else {
       totais = totaisFinanceiroMes_(yyyyMM);
       tituloPeriodo = fmtMesLabel_(yyyyMM + "-01");
       refFaturamento = totaisMesAnterior.faturamento;
-      refSaidas = totaisMesAnterior.custo + totaisMesAnterior.taxa + totaisMesAnterior.frete + totaisMesAnterior.ads;
+      refSaidas =
+        totaisMesAnterior.custo + totaisMesAnterior.taxa + totaisMesAnterior.frete + totaisMesAnterior.ads;
       refLucro = totaisMesAnterior.lucro;
-      refMargem = totaisMesAnterior.faturamento ? totaisMesAnterior.lucro / totaisMesAnterior.faturamento : null;
+      refMargem = totaisMesAnterior.faturamento
+        ? totaisMesAnterior.lucro / totaisMesAnterior.faturamento
+        : null;
     }
 
     const totalSaidas = totais.custo + totais.taxa + totais.frete + totais.ads;
-    const margem = totais.faturamento ? (totais.lucro / totais.faturamento) : 0;
-    const rotuloConta = state.contaFinanceiro === "1" ? " — Conta 1" : state.contaFinanceiro === "2" ? " — Conta 2" : "";
+    const margem = totais.faturamento ? totais.lucro / totais.faturamento : 0;
+    const rotuloConta =
+      state.contaFinanceiro === "1" ? " — Conta 1" : state.contaFinanceiro === "2" ? " — Conta 2" : "";
 
     document.getElementById("finKpiRow").innerHTML = `
       <div class="fin-kpi fin-kpi--in">
@@ -1552,8 +2095,12 @@
     // conta separadamente — no período (mês ou dia) que estiver selecionado.
     const breakdown = document.getElementById("finContaBreakdown");
     if (state.contaFinanceiro === "ambas" && (state.transacoes_2.length || state.transacoes.length)) {
-      const totaisConta1 = noModoDia ? totaisFinanceiroDia_(state.diaFinanceiro, "1") : totaisFinanceiroMes_(yyyyMM, "1");
-      const totaisConta2 = noModoDia ? totaisFinanceiroDia_(state.diaFinanceiro, "2") : totaisFinanceiroMes_(yyyyMM, "2");
+      const totaisConta1 = noModoDia
+        ? totaisFinanceiroDia_(state.diaFinanceiro, "1")
+        : totaisFinanceiroMes_(yyyyMM, "1");
+      const totaisConta2 = noModoDia
+        ? totaisFinanceiroDia_(state.diaFinanceiro, "2")
+        : totaisFinanceiroMes_(yyyyMM, "2");
       breakdown.innerHTML = `
         <div class="fin-kpi">
           <span class="fin-kpi__value">${fmtMoney(totaisConta1.faturamento)}</span>
@@ -1579,7 +2126,10 @@
     if (!noModoDia) {
       labels = [fmtMesLabel_(yyyyMMAnterior + "-01"), fmtMesLabel_(yyyyMM + "-01")];
       fatData = [totaisMesAnterior.faturamento, totais.faturamento];
-      saidaData = [totaisMesAnterior.custo + totaisMesAnterior.taxa + totaisMesAnterior.frete + totaisMesAnterior.ads, totalSaidas];
+      saidaData = [
+        totaisMesAnterior.custo + totaisMesAnterior.taxa + totaisMesAnterior.frete + totaisMesAnterior.ads,
+        totalSaidas,
+      ];
       lucroData = [totaisMesAnterior.lucro, totais.lucro];
     } else {
       const dias = serieDiariaDoMes_(state.diaFinanceiro.slice(0, 7));
@@ -1596,13 +2146,23 @@
         datasets: [
           { label: "Faturamento", data: fatData, backgroundColor: "#3DDC97" },
           { label: "Custo + Taxas + Frete + Ads", data: saidaData, backgroundColor: "#FF6B6B" },
-          { label: "Lucro líquido", data: lucroData, type: "line", borderColor: "#5B9CFF", backgroundColor: "transparent", tension: 0.3, pointRadius: 2 },
+          {
+            label: "Lucro líquido",
+            data: lucroData,
+            type: "line",
+            borderColor: "#5B9CFF",
+            backgroundColor: "transparent",
+            tension: 0.3,
+            pointRadius: 2,
+          },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: true, position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } } },
+        plugins: {
+          legend: { display: true, position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } },
+        },
         scales: { x: { ticks: { font: { size: 10 } } }, y: { ticks: { font: { size: 10 } } } },
       },
     });
@@ -1611,7 +2171,9 @@
   document.getElementById("financeiroContaToggle").addEventListener("click", (e) => {
     const btn = e.target.closest(".toggle-btn");
     if (!btn) return;
-    document.querySelectorAll("#financeiroContaToggle .toggle-btn").forEach((b) => b.classList.remove("active"));
+    document
+      .querySelectorAll("#financeiroContaToggle .toggle-btn")
+      .forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     state.contaFinanceiro = btn.dataset.conta;
     renderFinanceiro();
@@ -1622,23 +2184,79 @@
   // você mandou) — cada categoria já sabe se entra ou não na DRE, pra você
   // não ter que marcar isso na mão em cada lançamento.
   const PLANO_CONTAS = [
-    { grupo: "Receitas", impactaDre: true, categorias: ["Receita Marketplace", "Outras Receitas", "Reembolsos"] },
-    { grupo: "Custos", impactaDre: true, categorias: ["Mercadorias", "Matéria-prima", "Embalagens", "Fretes", "Produção"] },
-    { grupo: "Despesas Operacionais", impactaDre: true, categorias: ["Marketing", "Contabilidade", "Sistemas", "Internet", "Energia", "Telefonia", "Aluguel", "Pró-labore", "Serviços de terceiros", "Logística", "Tarifas bancárias"] },
-    { grupo: "Financeiras", impactaDre: true, categorias: ["Juros", "IOF", "Antecipações", "Tarifas financeiras"] },
-    { grupo: "Patrimoniais (fora da DRE)", impactaDre: false, categorias: ["Empréstimos recebidos", "Pagamento de empréstimos", "Transferências entre contas", "Aportes", "Distribuição de lucros", "Retirada de sócios"] },
+    {
+      grupo: "Receitas",
+      impactaDre: true,
+      categorias: ["Receita Marketplace", "Outras Receitas", "Reembolsos"],
+    },
+    {
+      grupo: "Custos",
+      impactaDre: true,
+      categorias: ["Mercadorias", "Matéria-prima", "Embalagens", "Fretes", "Produção"],
+    },
+    {
+      grupo: "Despesas Operacionais",
+      impactaDre: true,
+      categorias: [
+        "Marketing",
+        "Contabilidade",
+        "Sistemas",
+        "Internet",
+        "Energia",
+        "Telefonia",
+        "Aluguel",
+        "Pró-labore",
+        "Serviços de terceiros",
+        "Logística",
+        "Tarifas bancárias",
+      ],
+    },
+    {
+      grupo: "Financeiras",
+      impactaDre: true,
+      categorias: ["Juros", "IOF", "Antecipações", "Tarifas financeiras"],
+    },
+    {
+      grupo: "Patrimoniais (fora da DRE)",
+      impactaDre: false,
+      categorias: [
+        "Empréstimos recebidos",
+        "Pagamento de empréstimos",
+        "Transferências entre contas",
+        "Aportes",
+        "Distribuição de lucros",
+        "Retirada de sócios",
+      ],
+    },
   ];
 
+  // AINDA NÃO USADA — de propósito, e isto é um lembrete, não esquecimento.
+  //
+  // O plano de contas marca quais categorias entram no resultado. O DRE de
+  // hoje não usa isso porque ele é montado só com venda do Mercado Livre:
+  // faturamento menos custo do produto, comissão e frete. Despesa lançada
+  // à mão (aluguel, imposto, juros do empréstimo) não entra em lugar
+  // nenhum do resultado.
+  //
+  // Ou seja: o "lucro operacional" do painel é lucro de PRODUTO, não da
+  // empresa. Enquanto for assim, esta função é a costura pronta pro dia em
+  // que as despesas entrarem — e apagá-la faria perder a regra junto.
+  // biome-ignore lint/correctness/noUnusedVariables: mantida de propósito — ver comentário acima
   function categoriaImpactaDre_(categoria) {
     for (const g of PLANO_CONTAS) if (g.categorias.includes(categoria)) return g.impactaDre;
     return true; // categoria desconhecida/vazia: assume que entra, pra não escondermos nada por engano
   }
 
   function opcoesPlanoContasHtml_(categoriaAtual) {
-    return `<option value="">— categorizar —</option>` + PLANO_CONTAS.map((g) => `
+    return (
+      `<option value="">— categorizar —</option>` +
+      PLANO_CONTAS.map(
+        (g) => `
       <optgroup label="${escapeHtml(g.grupo)}">
         ${g.categorias.map((c) => `<option value="${escapeHtml(c)}" ${c === categoriaAtual ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
-      </optgroup>`).join("");
+      </optgroup>`
+      ).join("")
+    );
   }
 
   function movimentosMpCombinados_() {
@@ -1697,7 +2315,10 @@
       sel.dataset.opcoes = meses.join(",");
     }
     if (state.caixaMes && meses.includes(state.caixaMes)) sel.value = state.caixaMes;
-    else { state.caixaMes = meses[0]; sel.value = state.caixaMes; }
+    else {
+      state.caixaMes = meses[0];
+      sel.value = state.caixaMes;
+    }
   }
 
   document.getElementById("caixaMesSelect").addEventListener("change", (e) => {
@@ -1744,17 +2365,23 @@
     const ordenado = Object.entries(grupos).sort((a, b) => b[1] - a[1]);
 
     const el = document.getElementById("caixaOrigemBreakdown");
-    if (!ordenado.length || !total) { el.innerHTML = ""; return; }
-    el.innerHTML = `<div class="origem-breakdown__titulo">De onde entrou</div>` +
-      ordenado.map(([nome, valor]) => {
-        const pct = (valor / total) * 100;
-        return `
+    if (!ordenado.length || !total) {
+      el.innerHTML = "";
+      return;
+    }
+    el.innerHTML =
+      `<div class="origem-breakdown__titulo">De onde entrou</div>` +
+      ordenado
+        .map(([nome, valor]) => {
+          const pct = (valor / total) * 100;
+          return `
           <div class="origem-item">
             <span class="origem-item__nome">${escapeHtml(nome)}</span>
             <div class="origem-item__barra-fundo"><div class="origem-item__barra" style="width:${pct.toFixed(1)}%"></div></div>
             <span class="origem-item__valor">${fmtMoney(valor)} · ${pct.toFixed(0)}%</span>
           </div>`;
-      }).join("");
+        })
+        .join("");
   }
 
   // "Disponível" = já liberado pelo Mercado Livre (você já pode usar esse
@@ -1762,10 +2389,15 @@
   // retendo (normalmente libera uns dias depois da venda). Isso evita a
   // confusão de olhar o total e achar que já tem tudo isso na mão.
   function renderMercadoLivreDisponivel_(yyyyMM) {
-    const doMes = movimentosMpCombinados_()
-      .filter((m) => (m.data || "").slice(0, 7) === yyyyMM && m.origem === "Mercado Livre" && pagamentoAprovado_(m));
-    const disponivel = doMes.filter((m) => m.status_liberacao === "released").reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
-    const aLiberar = doMes.filter((m) => m.status_liberacao === "pending").reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
+    const doMes = movimentosMpCombinados_().filter(
+      (m) => (m.data || "").slice(0, 7) === yyyyMM && m.origem === "Mercado Livre" && pagamentoAprovado_(m)
+    );
+    const disponivel = doMes
+      .filter((m) => m.status_liberacao === "released")
+      .reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
+    const aLiberar = doMes
+      .filter((m) => m.status_liberacao === "pending")
+      .reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
     const total = disponivel + aLiberar;
 
     document.getElementById("caixaMlRow").innerHTML = `
@@ -1809,7 +2441,9 @@
     linhas = linhas.slice().sort((a, b) => (a.data < b.data ? 1 : -1));
 
     const totalEntradas = linhas.reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
-    const totalMarketplace = linhas.filter((m) => m.origem === "Mercado Livre").reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
+    const totalMarketplace = linhas
+      .filter((m) => m.origem === "Mercado Livre")
+      .reduce((s, m) => s + valorLiquidoEfetivo_(m), 0);
     const totalOutras = totalEntradas - totalMarketplace;
     const naoCategorizados = linhas.filter((m) => !m.categoria).length;
 
@@ -1835,9 +2469,11 @@
       </div>`;
 
     document.getElementById("caixaCount").textContent = `(${linhas.length})`;
-    document.getElementById("caixaBody").innerHTML = linhas.map((m) => `
+    document.getElementById("caixaBody").innerHTML = linhas
+      .map(
+        (m) => `
       <tr>
-        <td>${((m.data_liberacao || m.data) || "").split("-").reverse().join("/")}</td>
+        <td>${(m.data_liberacao || m.data || "").split("-").reverse().join("/")}</td>
         <td class="titulo-cell" style="max-width:280px;">${escapeHtml(m.descricao || "-")}</td>
         <td><span class="conta-badge conta-badge--${m.contaMp}">${m.contaMp}</span></td>
         <td><span class="conta-badge conta-badge--${m.origem === "Mercado Livre" ? "1" : "2"}" style="width:auto;border-radius:10px;padding:2px 8px;">${escapeHtml(m.origem || "-")}</span></td>
@@ -1849,7 +2485,9 @@
         </td>
         <td class="num">${fmtPrecoComPromo(m.valor, m.valor_liquido || m.valor)}${Number(m.valor_reembolsado) > 0 ? `<br><span class="price-promo">-${fmtMoney(m.valor_reembolsado)} reemb.</span>` : ""}</td>
         <td>${m.status_liberacao === "released" ? "✅ Liberado" : m.status_liberacao === "pending" ? "⏳ Pendente" : escapeHtml(m.status_liberacao || "-")}</td>
-      </tr>`).join("");
+      </tr>`
+      )
+      .join("");
 
     document.querySelectorAll(".categoria-mp-select").forEach((sel) => {
       sel.addEventListener("change", () => salvarCategoriaMovimentoMP_(sel));
@@ -1866,7 +2504,14 @@
       const resp = await fetch(cfg.apiUrl, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ token: cfg.apiToken, acao: "categorizar_movimento_mp", pagamento_id: pagamentoId, categoria, salvar_regra: true, conta_mp: select.dataset.contaMp }),
+        body: JSON.stringify({
+          token: cfg.apiToken,
+          acao: "categorizar_movimento_mp",
+          pagamento_id: pagamentoId,
+          categoria,
+          salvar_regra: true,
+          conta_mp: select.dataset.contaMp,
+        }),
       });
       const data = await resp.json();
       if (!data.ok) throw new Error(data.error || "erro");
@@ -1881,10 +2526,15 @@
 
   // ------------------------------------------------------- Contas a Pagar
   function categoriasFlatOptionsHtml_() {
-    return `<option value="">Categoria</option>` + PLANO_CONTAS.map((g) => `
+    return (
+      `<option value="">Categoria</option>` +
+      PLANO_CONTAS.map(
+        (g) => `
       <optgroup label="${escapeHtml(g.grupo)}">
         ${g.categorias.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("")}
-      </optgroup>`).join("");
+      </optgroup>`
+      ).join("")
+    );
   }
   document.getElementById("apagarCategoria").innerHTML = categoriasFlatOptionsHtml_();
   document.getElementById("areceberCategoria").innerHTML = categoriasFlatOptionsHtml_();
@@ -1904,12 +2554,20 @@
     const contas = (state.contas_pagar || []).slice().sort((a, b) => (a.vencimento < b.vencimento ? -1 : 1));
     const pendentes = contas.filter((c) => c.status === "Pendente");
     const totalPendente = pendentes.reduce((s, c) => s + Number(c.valor || 0), 0);
-    const vencendo7 = pendentes.filter((c) => { const d = diasAteVencimento_(c.vencimento); return d !== null && d >= 0 && d <= 7; })
+    const vencendo7 = pendentes
+      .filter((c) => {
+        const d = diasAteVencimento_(c.vencimento);
+        return d !== null && d >= 0 && d <= 7;
+      })
       .reduce((s, c) => s + Number(c.valor || 0), 0);
-    const vencidas = pendentes.filter((c) => { const d = diasAteVencimento_(c.vencimento); return d !== null && d < 0; });
+    const vencidas = pendentes.filter((c) => {
+      const d = diasAteVencimento_(c.vencimento);
+      return d !== null && d < 0;
+    });
     const totalVencido = vencidas.reduce((s, c) => s + Number(c.valor || 0), 0);
     const hojeIso = isoDate_(new Date());
-    const pagoNoMes = contas.filter((c) => c.status === "Pago" && (c.data_pagamento || "").slice(0, 7) === hojeIso.slice(0, 7))
+    const pagoNoMes = contas
+      .filter((c) => c.status === "Pago" && (c.data_pagamento || "").slice(0, 7) === hojeIso.slice(0, 7))
       .reduce((s, c) => s + Number(c.valor || 0), 0);
 
     document.getElementById("apagarKpiRow").innerHTML = `
@@ -1931,10 +2589,11 @@
       </div>`;
 
     document.getElementById("apagarCount").textContent = `(${contas.length})`;
-    document.getElementById("apagarBody").innerHTML = contas.map((c) => {
-      const dias = diasAteVencimento_(c.vencimento);
-      const statusExibido = c.status === "Pendente" && dias !== null && dias < 0 ? "Vencida" : c.status;
-      return `
+    document.getElementById("apagarBody").innerHTML = contas
+      .map((c) => {
+        const dias = diasAteVencimento_(c.vencimento);
+        const statusExibido = c.status === "Pendente" && dias !== null && dias < 0 ? "Vencida" : c.status;
+        return `
       <tr>
         <td>${(c.vencimento || "").split("-").reverse().join("/")}</td>
         <td>${escapeHtml(c.descricao)}</td>
@@ -1946,10 +2605,13 @@
         <td>${c.status === "Pendente" ? `<button type="button" class="btn btn--ghost btn--icon acao-conta-pagar" data-id="${c.id}" data-acao="marcar_conta_pagar_paga" title="Marcar como pago">✓</button>` : ""}
           <button type="button" class="btn btn--ghost btn--icon acao-conta-pagar" data-id="${c.id}" data-acao="excluir_conta_pagar" title="Excluir">✕</button></td>
       </tr>`;
-    }).join("");
+      })
+      .join("");
 
     document.querySelectorAll(".acao-conta-pagar").forEach((btn) => {
-      btn.addEventListener("click", () => executarAcaoConta_(btn.dataset.acao, btn.dataset.id, "contas_pagar"));
+      btn.addEventListener("click", () =>
+        executarAcaoConta_(btn.dataset.acao, btn.dataset.id, "contas_pagar")
+      );
     });
   }
 
@@ -1963,7 +2625,8 @@
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
-          token: cfg.apiToken, acao: "adicionar_conta_pagar",
+          token: cfg.apiToken,
+          acao: "adicionar_conta_pagar",
           descricao: document.getElementById("apagarDescricao").value,
           fornecedor: document.getElementById("apagarFornecedor").value,
           categoria: document.getElementById("apagarCategoria").value,
@@ -2044,25 +2707,40 @@
   }
 
   function renderAreceber() {
-    const contas = (state.contas_receber || []).map((c) => ({ ...c, automatico: false }))
+    const contas = (state.contas_receber || [])
+      .map((c) => ({ ...c, automatico: false }))
       .concat(recebiveisAutomaticosML_())
       .sort((a, b) => (a.vencimento < b.vencimento ? -1 : 1));
     const pendentes = contas.filter((c) => c.status === "A receber");
     const totalPendente = pendentes.reduce((s, c) => s + Number(c.valor || 0), 0);
-    const previsto7 = pendentes.filter((c) => { const d = diasAteVencimento_(c.vencimento); return d !== null && d >= 0 && d <= 7; })
+    const previsto7 = pendentes
+      .filter((c) => {
+        const d = diasAteVencimento_(c.vencimento);
+        return d !== null && d >= 0 && d <= 7;
+      })
       .reduce((s, c) => s + Number(c.valor || 0), 0);
-    const atrasados = pendentes.filter((c) => { const d = diasAteVencimento_(c.vencimento); return d !== null && d < 0; });
+    const atrasados = pendentes.filter((c) => {
+      const d = diasAteVencimento_(c.vencimento);
+      return d !== null && d < 0;
+    });
     const totalAtrasado = atrasados.reduce((s, c) => s + Number(c.valor || 0), 0);
     const hojeIso = isoDate_(new Date());
-    const recebidoNoMes = contas.filter((c) => c.status === "Recebido" && (c.data_recebimento || "").slice(0, 7) === hojeIso.slice(0, 7))
+    const recebidoNoMes = contas
+      .filter(
+        (c) => c.status === "Recebido" && (c.data_recebimento || "").slice(0, 7) === hojeIso.slice(0, 7)
+      )
       .reduce((s, c) => s + Number(c.valor || 0), 0);
 
     // Quebra do total, pra dar pra CONFERIR com o app do Mercado Pago:
     // o app mostra o "a liberar" de UMA conta por vez, só do Mercado
     // Livre, sem as contas manuais — então compare cada pedaço com o app
     // da conta correspondente, não o total com um app só.
-    const mlConta1 = pendentes.filter((c) => c.automatico && c.contaMp === "1").reduce((s, c) => s + Number(c.valor || 0), 0);
-    const mlConta2 = pendentes.filter((c) => c.automatico && c.contaMp === "2").reduce((s, c) => s + Number(c.valor || 0), 0);
+    const mlConta1 = pendentes
+      .filter((c) => c.automatico && c.contaMp === "1")
+      .reduce((s, c) => s + Number(c.valor || 0), 0);
+    const mlConta2 = pendentes
+      .filter((c) => c.automatico && c.contaMp === "2")
+      .reduce((s, c) => s + Number(c.valor || 0), 0);
     const manuais = pendentes.filter((c) => !c.automatico).reduce((s, c) => s + Number(c.valor || 0), 0);
 
     document.getElementById("areceberKpiRow").innerHTML = `
@@ -2085,10 +2763,11 @@
       </div>`;
 
     document.getElementById("areceberCount").textContent = `(${contas.length})`;
-    document.getElementById("areceberBody").innerHTML = contas.map((c) => {
-      const dias = diasAteVencimento_(c.vencimento);
-      const statusExibido = c.status === "A receber" && dias !== null && dias < 0 ? "Atrasado" : c.status;
-      return `
+    document.getElementById("areceberBody").innerHTML = contas
+      .map((c) => {
+        const dias = diasAteVencimento_(c.vencimento);
+        const statusExibido = c.status === "A receber" && dias !== null && dias < 0 ? "Atrasado" : c.status;
+        return `
       <tr>
         <td>${(c.vencimento || "").split("-").reverse().join("/")}</td>
         <td>${escapeHtml(c.descricao)}</td>
@@ -2096,14 +2775,21 @@
         <td>${escapeHtml(c.categoria || "-")}</td>
         <td class="num">${fmtMoney(c.valor)}</td>
         <td>${fmtStatusBadge_(statusExibido)}</td>
-        <td>${c.automatico ? `<span class="muted" style="font-size:11px;">liberação automática</span>` : `
+        <td>${
+          c.automatico
+            ? `<span class="muted" style="font-size:11px;">liberação automática</span>`
+            : `
           ${c.status === "A receber" ? `<button type="button" class="btn btn--ghost btn--icon acao-conta-receber" data-id="${c.id}" data-acao="marcar_conta_receber_recebida" title="Marcar como recebido">✓</button>` : ""}
-          <button type="button" class="btn btn--ghost btn--icon acao-conta-receber" data-id="${c.id}" data-acao="excluir_conta_receber" title="Excluir">✕</button>`}</td>
+          <button type="button" class="btn btn--ghost btn--icon acao-conta-receber" data-id="${c.id}" data-acao="excluir_conta_receber" title="Excluir">✕</button>`
+        }</td>
       </tr>`;
-    }).join("");
+      })
+      .join("");
 
     document.querySelectorAll(".acao-conta-receber").forEach((btn) => {
-      btn.addEventListener("click", () => executarAcaoConta_(btn.dataset.acao, btn.dataset.id, "contas_receber"));
+      btn.addEventListener("click", () =>
+        executarAcaoConta_(btn.dataset.acao, btn.dataset.id, "contas_receber")
+      );
     });
   }
 
@@ -2117,7 +2803,8 @@
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
-          token: cfg.apiToken, acao: "adicionar_conta_receber",
+          token: cfg.apiToken,
+          acao: "adicionar_conta_receber",
           descricao: document.getElementById("areceberDescricao").value,
           cliente: document.getElementById("areceberCliente").value,
           categoria: document.getElementById("areceberCategoria").value,
@@ -2141,7 +2828,7 @@
   // Ação genérica (marcar como pago/recebido, ou excluir) pras duas telas —
   // sempre busca os dados de novo no final, pra tudo (KPIs, tabela) ficar
   // consistente sem precisar duplicar a lógica de atualização local.
-  async function executarAcaoConta_(acao, id, campoEstado) {
+  async function executarAcaoConta_(acao, id, _campoEstado) {
     if (acao.startsWith("excluir") && !confirm("Tem certeza que quer excluir esse lançamento?")) return;
     const cfg = loadConfig();
     try {
@@ -2182,7 +2869,9 @@
   function totaisDoDia_(isoDate) {
     const txs = transacoesDoDia_(isoDate);
     const pedidos = new Set();
-    let faturamento = 0, unidades = 0, lucro = 0;
+    let faturamento = 0,
+      unidades = 0,
+      lucro = 0;
     txs.forEach((t) => {
       faturamento += Number(t.faturamento || 0);
       unidades += Number(t.quantidade || 0);
@@ -2202,7 +2891,10 @@
 
     const agora = new Date();
     document.getElementById("heroAtualizadoEm").textContent =
-      "Atualizado às " + String(agora.getHours()).padStart(2, "0") + ":" + String(agora.getMinutes()).padStart(2, "0");
+      "Atualizado às " +
+      String(agora.getHours()).padStart(2, "0") +
+      ":" +
+      String(agora.getMinutes()).padStart(2, "0");
 
     renderMetricasChaveHoje_(totais);
     renderTendenciaHoraria_();
@@ -2251,7 +2943,10 @@
   // depende dele também fica marcado como incompleto.
 
   function componente_(valor, origem, quando, extra) {
-    return Object.assign({ valor: Number(valor || 0), disponivel: true, origem, quando: quando || null }, extra || {});
+    return Object.assign(
+      { valor: Number(valor || 0), disponivel: true, origem, quando: quando || null },
+      extra || {}
+    );
   }
   function indisponivel_(origem, motivo) {
     return { valor: 0, disponivel: false, origem, motivo, quando: null };
@@ -2296,9 +2991,11 @@
     // dizia "não disponível" tanto quando o problema era publicação quanto
     // quando era preenchimento.
     if (!Object.prototype.hasOwnProperty.call(state, "saldo_mp") || state.saldo_mp === undefined) {
-      return indisponivel_("Mercado Pago",
+      return indisponivel_(
+        "Mercado Pago",
         "O site não recebeu o campo saldo_mp. A implantação do WebApp.gs está desatualizada — " +
-        "Implantar → Gerenciar implantações → lápis → Nova versão.");
+          "Implantar → Gerenciar implantações → lápis → Nova versão."
+      );
     }
 
     // O saldo_mp pode chegar de duas formas:
@@ -2324,18 +3021,25 @@
     const lidas = contas.filter((c) => c.estado === "lido");
 
     if (objeto && bruto.total === null) {
-      return indisponivel_("Mercado Pago",
-        "Nenhuma das contas tem saldo preenchido na aba \"Saldo MP\"" +
-        (faltando.length ? " — " + faltando.map((c) => "conta " + c.conta + ": " + c.motivo).join("; ") : "") + ".");
+      return indisponivel_(
+        "Mercado Pago",
+        'Nenhuma das contas tem saldo preenchido na aba "Saldo MP"' +
+          (faltando.length
+            ? " — " + faltando.map((c) => "conta " + c.conta + ": " + c.motivo).join("; ")
+            : "") +
+          "."
+      );
     }
 
     // Barreira contra número absurdo. Já aconteceu: uma coluna de DATA foi
     // lida como dinheiro e o caixa virou R$ 3,5 trilhões. Um número desses
     // num painel financeiro contamina tudo em volta — percentual,
     // patrimônio, alertas — e é pior que não ter número nenhum.
-    if (!isFinite(saldo) || saldo < 0 || saldo > 1e11) {
-      return indisponivel_("Mercado Pago",
-        "O saldo veio com um valor impossível (" + saldo + "). Confira a aba Saldo MP na planilha.");
+    if (!Number.isFinite(saldo) || saldo < 0 || saldo > 1e11) {
+      return indisponivel_(
+        "Mercado Pago",
+        "O saldo veio com um valor impossível (" + saldo + "). Confira a aba Saldo MP na planilha."
+      );
     }
 
     // Alguma conta ficou de fora: o número que sobrou é verdadeiro, mas é
@@ -2343,11 +3047,15 @@
     // conta não entrou, pra você não conferir contra o app achando que
     // está comparando a mesma coisa.
     if (objeto && faltando.length) {
-      return componente_(saldo,
-        "só a conta " + lidas.map((c) => c.conta).join(" e ") + " — falta a conta " +
-        faltando.map((c) => c.conta).join(" e "),
+      return componente_(
+        saldo,
+        "só a conta " +
+          lidas.map((c) => c.conta).join(" e ") +
+          " — falta a conta " +
+          faltando.map((c) => c.conta).join(" e "),
         null,
-        { parcial: true, faltando: faltando });
+        { parcial: true, faltando: faltando }
+      );
     }
 
     // As duas contas foram lidas, mas alguma veio com ressalva do
@@ -2360,11 +3068,16 @@
     if (objeto) {
       const comAlerta = lidas.filter((c) => c.alerta);
       if (comAlerta.length) {
-        return componente_(saldo,
+        return componente_(
+          saldo,
           comAlerta.map((c) => "conta " + c.conta + ": " + limparNota_(c.nota)).join(" · "),
-          null, { parcial: true });
+          null,
+          { parcial: true }
+        );
       }
-      return componente_(saldo, "saldo das " + lidas.length + " contas do Mercado Pago", null, { contas: lidas.length });
+      return componente_(saldo, "saldo das " + lidas.length + " contas do Mercado Pago", null, {
+        contas: lidas.length,
+      });
     }
 
     if (saldo > 0) {
@@ -2372,9 +3085,11 @@
     }
     // O campo chegou, mas veio zerado: aqui o problema é na planilha, não
     // na publicação.
-    return indisponivel_("Mercado Pago",
+    return indisponivel_(
+      "Mercado Pago",
       "O campo chegou mas está zerado. Na planilha, preencha o saldo das duas contas na aba " +
-      "\"Saldo MP\" (colunas B e C) e rode atualizarCapital.");
+        '"Saldo MP" (colunas B e C) e rode atualizarCapital.'
+    );
   }
 
   // ---- 2. A RECEBER (só o que está pending no Mercado Pago) + janelas
@@ -2384,11 +3099,15 @@
 
     const hoje = isoDate_(new Date());
     const emDias = (n) => isoDate_(new Date(Date.now() + n * 86400000));
-    const d7 = emDias(7), d30 = emDias(30);
+    const d7 = emDias(7),
+      d30 = emDias(30);
 
     const balde = { vencido: 0, hoje: 0, ate7: 0, ate30: 0, depois: 0, semData: 0 };
     const somar = (venc, valor) => {
-      if (!venc) { balde.semData += valor; return; }
+      if (!venc) {
+        balde.semData += valor;
+        return;
+      }
       const v = String(venc).slice(0, 10);
       if (v < hoje) balde.vencido += valor;
       else if (v === hoje) balde.hoje += valor;
@@ -2403,24 +3122,49 @@
     // não é "a receber" no mesmo sentido: é entrega não confirmada,
     // reclamação ou mediação. Pode não cair nunca. Somar os dois esconde um
     // problema de operação atrás de um número que parece saudável.
-    let mp1 = 0, mp2 = 0, retido = 0, retidoItens = 0, mediacao = 0, mediacaoItens = 0;
+    let mp1 = 0,
+      mp2 = 0,
+      retido = 0,
+      retidoItens = 0,
+      mediacao = 0,
+      mediacaoItens = 0;
     automaticos.forEach((r) => {
       const v = Number(r.valor || 0);
-      if (r.mediacao) { mediacao += v; mediacaoItens++; }
+      if (r.mediacao) {
+        mediacao += v;
+        mediacaoItens++;
+      }
       const venc = r.vencimento ? String(r.vencimento).slice(0, 10) : "";
       // Em mediação não vira "retido" mesmo com data vencida — é outra
       // situação: não é entrega parada, é disputa aberta.
-      if (!r.mediacao && venc && venc < hoje) { retido += v; retidoItens++; return; }
-      if (r.contaMp === "1") mp1 += v; else mp2 += v;
+      if (!r.mediacao && venc && venc < hoje) {
+        retido += v;
+        retidoItens++;
+        return;
+      }
+      if (r.contaMp === "1") mp1 += v;
+      else mp2 += v;
       somar(r.vencimento, v);
     });
     let outros = 0;
-    manuais.forEach((c) => { const v = Number(c.valor || 0); outros += v; somar(c.vencimento, v); });
+    manuais.forEach((c) => {
+      const v = Number(c.valor || 0);
+      outros += v;
+      somar(c.vencimento, v);
+    });
 
     const total = mp1 + mp2 + outros;
-    return componente_(total, "Mercado Pago · aprovado, com data pra liberar", null,
-      { mp1, mp2, outros, balde, retido, retidoItens, mediacao, mediacaoItens,
-        itens: automaticos.length + manuais.length });
+    return componente_(total, "Mercado Pago · aprovado, com data pra liberar", null, {
+      mp1,
+      mp2,
+      outros,
+      balde,
+      retido,
+      retidoItens,
+      mediacao,
+      mediacaoItens,
+      itens: automaticos.length + manuais.length,
+    });
   }
 
   // ---- 3. ESTOQUE a custo
@@ -2429,8 +3173,14 @@
     (state.linhasProdutosPorConta || []).forEach((p) => {
       const chave = p.conta + "|" + p.sku;
       const a = porContaSku.get(chave) || {
-        conta: p.conta, sku: p.sku, titulo: p.titulo, estoque: 0, custo: 0,
-        ativo: false, qtd30: 0, ultimaVenda: null,
+        conta: p.conta,
+        sku: p.sku,
+        titulo: p.titulo,
+        estoque: 0,
+        custo: 0,
+        ativo: false,
+        qtd30: 0,
+        ultimaVenda: null,
       };
       a.estoque = Math.max(a.estoque, Number(p.estoque || 0));
       a.custo = Math.max(a.custo, Number(p.custo || 0));
@@ -2440,10 +3190,19 @@
       porContaSku.set(chave, a);
     });
 
-    let total = 0, unidades = 0, anuncios = 0, foraDoAr = 0, foraDoArUn = 0;
-    let semCusto = 0, unidadesSemCusto = 0, parado = 0, semGiro = 0, critico = 0;
+    let total = 0,
+      unidades = 0,
+      anuncios = 0,
+      foraDoAr = 0,
+      foraDoArUn = 0;
+    let semCusto = 0,
+      unidadesSemCusto = 0,
+      parado = 0,
+      semGiro = 0,
+      critico = 0;
     const skus = new Set();
-    const semCustoLista = [], paradoLista = [];
+    const semCustoLista = [],
+      paradoLista = [];
     const limite90 = isoDate_(new Date(Date.now() - 90 * 86400000));
 
     porContaSku.forEach((v) => {
@@ -2460,8 +3219,11 @@
       // dia você vender algo acima disso, o item aparece na lista de
       // pendências pedindo conferência — visível, não descartado.
       const CUSTO_MAXIMO_POR_UNIDADE = 1e6;
-      if (!isFinite(v.custo) || v.custo <= 0 || v.custo > CUSTO_MAXIMO_POR_UNIDADE) {
-        semCusto++; unidadesSemCusto += v.estoque; semCustoLista.push(v); return;
+      if (!Number.isFinite(v.custo) || v.custo <= 0 || v.custo > CUSTO_MAXIMO_POR_UNIDADE) {
+        semCusto++;
+        unidadesSemCusto += v.estoque;
+        semCustoLista.push(v);
+        return;
       }
 
       const valor = v.estoque * v.custo;
@@ -2481,7 +3243,10 @@
       anuncios++;
 
       // Parado: nada vendido em 90 dias (ou nunca vendeu)
-      if (!v.ultimaVenda || v.ultimaVenda < limite90) { parado += valor; paradoLista.push(v); }
+      if (!v.ultimaVenda || v.ultimaVenda < limite90) {
+        parado += valor;
+        paradoLista.push(v);
+      }
       if (v.qtd30 === 0) semGiro++;
       // Crítico: gira, mas o estoque acaba em menos de 7 dias
       const porDia = v.qtd30 / 30;
@@ -2489,11 +3254,21 @@
     });
 
     semCustoLista.sort((a, b) => b.estoque - a.estoque);
-    paradoLista.sort((a, b) => (b.estoque * b.custo) - (a.estoque * a.custo));
+    paradoLista.sort((a, b) => b.estoque * b.custo - a.estoque * a.custo);
 
     return componente_(total, "Mercado Livre · anúncio no ar × custo", null, {
-      unidades, anuncios, skus: skus.size, foraDoAr, foraDoArUn, parado, semGiro, critico,
-      semCusto, unidadesSemCusto, semCustoLista, paradoLista,
+      unidades,
+      anuncios,
+      skus: skus.size,
+      foraDoAr,
+      foraDoArUn,
+      parado,
+      semGiro,
+      critico,
+      semCusto,
+      unidadesSemCusto,
+      semCustoLista,
+      paradoLista,
     });
   }
 
@@ -2501,15 +3276,20 @@
   function fpAPagar_() {
     const pendentes = (state.contas_pagar || []).filter((c) => c.status !== "Pago");
     if (!(state.contas_pagar || []).length) {
-      return Object.assign(indisponivel_("Contas a pagar",
-        "Nenhuma conta lançada ainda. É o único bloco que depende de lançamento manual — " +
-        "não existe API que saiba dos seus fornecedores, impostos e aluguel."),
-        { balde: { vencido: 0, hoje: 0, ate7: 0, ate30: 0, depois: 0, semData: 0 }, porCategoria: {} });
+      return Object.assign(
+        indisponivel_(
+          "Contas a pagar",
+          "Nenhuma conta lançada ainda. É o único bloco que depende de lançamento manual — " +
+            "não existe API que saiba dos seus fornecedores, impostos e aluguel."
+        ),
+        { balde: { vencido: 0, hoje: 0, ate7: 0, ate30: 0, depois: 0, semData: 0 }, porCategoria: {} }
+      );
     }
 
     const hoje = isoDate_(new Date());
     const emDias = (n) => isoDate_(new Date(Date.now() + n * 86400000));
-    const d7 = emDias(7), d30 = emDias(30);
+    const d7 = emDias(7),
+      d30 = emDias(30);
     const balde = { vencido: 0, hoje: 0, ate7: 0, ate30: 0, depois: 0, semData: 0 };
     const porCategoria = {};
 
@@ -2528,8 +3308,11 @@
       else balde.depois += v;
     });
 
-    return componente_(total, "lançamentos manuais · aba ContasAPagar", null,
-      { balde, porCategoria, itens: pendentes.length });
+    return componente_(total, "lançamentos manuais · aba ContasAPagar", null, {
+      balde,
+      porCategoria,
+      itens: pendentes.length,
+    });
   }
 
   // ---- BALANÇO: ativos, passivos, patrimônio líquido
@@ -2550,8 +3333,13 @@
     const faltando = ativosComp.concat(passivosComp).filter((c) => !c.disponivel);
 
     return {
-      disponivel, aReceber, estoque, aPagar,
-      ativos, passivos, patrimonio: ativos - passivos,
+      disponivel,
+      aReceber,
+      estoque,
+      aPagar,
+      ativos,
+      passivos,
+      patrimonio: ativos - passivos,
       completo: faltando.length === 0,
       faltando: faltando.map((c) => c.origem),
 
@@ -2576,20 +3364,29 @@
       // Sem saber quando vence, assumir que é já é o lado seguro: no
       // máximo o giro fica pessimista, e pessimista a gente confere.
       curtoPrazo: aPagar.disponivel
-        ? aPagar.balde.vencido + aPagar.balde.hoje + aPagar.balde.ate7 + aPagar.balde.ate30 + aPagar.balde.semData
+        ? aPagar.balde.vencido +
+          aPagar.balde.hoje +
+          aPagar.balde.ate7 +
+          aPagar.balde.ate30 +
+          aPagar.balde.semData
         : 0,
       longoPrazo: aPagar.disponivel ? aPagar.balde.depois : 0,
-      entra30: aReceber.disponivel
-        ? aReceber.balde.hoje + aReceber.balde.ate7 + aReceber.balde.ate30
-        : 0,
+      entra30: aReceber.disponivel ? aReceber.balde.hoje + aReceber.balde.ate7 + aReceber.balde.ate30 : 0,
       // Repare que os dois lados tratam "sem data" de formas OPOSTAS, e é
       // de propósito. No que SAI, o sem data conta (pode vencer amanhã).
       // No que ENTRA, o sem data não conta (pode não chegar este mês).
       // As duas escolhas erram para o mesmo lado: o de não prometer folga
       // que talvez não exista.
-      giro: (disponivel.disponivel ? disponivel.valor : 0)
-          + (aReceber.disponivel ? (aReceber.balde.hoje + aReceber.balde.ate7 + aReceber.balde.ate30) : 0)
-          - (aPagar.disponivel ? (aPagar.balde.vencido + aPagar.balde.hoje + aPagar.balde.ate7 + aPagar.balde.ate30 + aPagar.balde.semData) : 0),
+      giro:
+        (disponivel.disponivel ? disponivel.valor : 0) +
+        (aReceber.disponivel ? aReceber.balde.hoje + aReceber.balde.ate7 + aReceber.balde.ate30 : 0) -
+        (aPagar.disponivel
+          ? aPagar.balde.vencido +
+            aPagar.balde.hoje +
+            aPagar.balde.ate7 +
+            aPagar.balde.ate30 +
+            aPagar.balde.semData
+          : 0),
     };
   }
 
@@ -2600,7 +3397,8 @@
   // que interessa é pedido que NÃO apareceu no MP de jeito nenhum.
   function fpReconciliacao_(dias) {
     const janela = isoDate_(new Date(Date.now() - (dias || 30) * 86400000));
-    const vendas = (state.transacoes || []).concat(state.transacoes_2 || [])
+    const vendas = (state.transacoes || [])
+      .concat(state.transacoes_2 || [])
       .filter((t) => (t.data || "") >= janela);
 
     const porPedido = new Map();
@@ -2621,17 +3419,27 @@
     });
 
     const semCorrespondencia = [];
-    let faturadoMl = 0, faturadoSemMp = 0;
+    let faturadoMl = 0,
+      faturadoSemMp = 0;
     porPedido.forEach((valor, id) => {
       faturadoMl += valor;
-      if (!noMp.has(id)) { semCorrespondencia.push(id); faturadoSemMp += valor; }
+      if (!noMp.has(id)) {
+        semCorrespondencia.push(id);
+        faturadoSemMp += valor;
+      }
     });
 
     const pedidos = porPedido.size;
     const cobertura = pedidos ? noMp.size / pedidos : 1;
     return {
-      dias: dias || 30, pedidos, casados: noMp.size, semCorrespondencia: semCorrespondencia.length,
-      faturadoMl, recebidoMp, faturadoSemMp, cobertura,
+      dias: dias || 30,
+      pedidos,
+      casados: noMp.size,
+      semCorrespondencia: semCorrespondencia.length,
+      faturadoMl,
+      recebidoMp,
+      faturadoSemMp,
+      cobertura,
       // Só acusa divergência quando pedido nenhum apareceu no MP — a
       // diferença de VALOR é normal (é a comissão do ML e o frete).
       ok: cobertura >= 0.95,
@@ -2650,7 +3458,10 @@
       // parcelada não é problema de liquidez só por ser grande.
       const cobre = b.disponivel.valor + b.entra30;
       if (b.aPagar.disponivel && b.curtoPrazo > cobre) {
-        add("laranja", `Vence ${fmtMoneyExato_(b.curtoPrazo)} nos próximos 30 dias, e você tem ${fmtMoneyExato_(cobre)} entre caixa e recebíveis do período.`);
+        add(
+          "laranja",
+          `Vence ${fmtMoneyExato_(b.curtoPrazo)} nos próximos 30 dias, e você tem ${fmtMoneyExato_(cobre)} entre caixa e recebíveis do período.`
+        );
       }
       if (b.aPagar.disponivel && b.aPagar.balde.vencido > 0) {
         add("vermelho", `${fmtMoneyExato_(b.aPagar.balde.vencido)} em contas VENCIDAS.`);
@@ -2658,12 +3469,17 @@
     }
 
     if (b.estoque.semCusto > 0) {
-      add("amarelo", `${b.estoque.semCusto} anúncio(s) com ${fmtNum(b.estoque.unidadesSemCusto)} unidades sem custo cadastrado — ficam fora do valor do estoque.`);
+      add(
+        "amarelo",
+        `${b.estoque.semCusto} anúncio(s) com ${fmtNum(b.estoque.unidadesSemCusto)} unidades sem custo cadastrado — ficam fora do valor do estoque.`
+      );
     }
     if (b.estoque.parado > 0) {
       const pct = b.estoque.valor > 0 ? b.estoque.parado / b.estoque.valor : 0;
-      add(pct > 0.4 ? "laranja" : "amarelo",
-        `${fmtMoneyExato_(b.estoque.parado)} (${fmtPct(pct)}) em estoque sem venda há mais de 90 dias.`);
+      add(
+        pct > 0.4 ? "laranja" : "amarelo",
+        `${fmtMoneyExato_(b.estoque.parado)} (${fmtPct(pct)}) em estoque sem venda há mais de 90 dias.`
+      );
     }
     if (b.estoque.critico > 0) {
       add("amarelo", `${b.estoque.critico} produto(s) com estoque para menos de 7 dias no ritmo atual.`);
@@ -2676,10 +3492,16 @@
     }
 
     if (b.aReceber.mediacao > 0) {
-      add("laranja", `${fmtMoneyExato_(b.aReceber.mediacao)} em ${b.aReceber.mediacaoItens} venda(s) em mediação — está contado no a receber, mas depende de ganhar a disputa.`);
+      add(
+        "laranja",
+        `${fmtMoneyExato_(b.aReceber.mediacao)} em ${b.aReceber.mediacaoItens} venda(s) em mediação — está contado no a receber, mas depende de ganhar a disputa.`
+      );
     }
     if (b.aReceber.retido > 0) {
-      add("laranja", `${fmtMoneyExato_(b.aReceber.retido)} em ${b.aReceber.retidoItens} pagamento(s) passaram da data de liberação e não caíram — entrega não confirmada, reclamação ou mediação.`);
+      add(
+        "laranja",
+        `${fmtMoneyExato_(b.aReceber.retido)} em ${b.aReceber.retidoItens} pagamento(s) passaram da data de liberação e não caíram — entrega não confirmada, reclamação ou mediação.`
+      );
     }
 
     // A pergunta que decide se uma dívida parcelada é sustentável não é
@@ -2688,16 +3510,21 @@
       const d30 = calcularDre_({ modo: "30d", valor: "" });
       if (d30.lucro > 0) {
         const folga = d30.lucro - b.curtoPrazo;
-        add(folga >= 0 ? "amarelo" : "vermelho",
+        add(
+          folga >= 0 ? "amarelo" : "vermelho",
           folga >= 0
             ? `A parcela do mês (${fmtMoneyExato_(b.curtoPrazo)}) cabe no lucro dos últimos 30 dias (${fmtMoneyExato_(d30.lucro)}) — sobram ${fmtMoneyExato_(folga)}.`
-            : `A parcela do mês (${fmtMoneyExato_(b.curtoPrazo)}) é maior que o lucro dos últimos 30 dias (${fmtMoneyExato_(d30.lucro)}). Faltam ${fmtMoneyExato_(-folga)} por mês.`);
+            : `A parcela do mês (${fmtMoneyExato_(b.curtoPrazo)}) é maior que o lucro dos últimos 30 dias (${fmtMoneyExato_(d30.lucro)}). Faltam ${fmtMoneyExato_(-folga)} por mês.`
+        );
       }
     }
 
     const rec = fpReconciliacao_(30);
     if (!rec.ok) {
-      add("vermelho", `${rec.semCorrespondencia} de ${rec.pedidos} pedidos dos últimos 30 dias não apareceram no Mercado Pago (${fmtMoneyExato_(rec.faturadoSemMp)}).`);
+      add(
+        "vermelho",
+        `${rec.semCorrespondencia} de ${rec.pedidos} pedidos dos últimos 30 dias não apareceram no Mercado Pago (${fmtMoneyExato_(rec.faturadoSemMp)}).`
+      );
     }
     return { lista: a, reconciliacao: rec };
   }
@@ -2708,11 +3535,12 @@
     const container = garantirContainerCapital_();
     if (!container) return;
 
-    const b = fpBalanco_();
+    const b = Telemetria.medir("balanco", () => fpBalanco_());
     const { lista: alertas, reconciliacao: rec } = fpAlertas_(b);
-    const totalOnde = (b.disponivel.disponivel ? b.disponivel.valor : 0)
-                    + (b.aReceber.disponivel ? b.aReceber.valor : 0)
-                    + (b.estoque.disponivel ? b.estoque.valor : 0);
+    const totalOnde =
+      (b.disponivel.disponivel ? b.disponivel.valor : 0) +
+      (b.aReceber.disponivel ? b.aReceber.valor : 0) +
+      (b.estoque.disponivel ? b.estoque.valor : 0);
     const onde = (v) => (totalOnde > 0 ? v / totalOnde : 0);
 
     const cor = { vermelho: "#FF6B9D", laranja: "#FFA857", amarelo: "#FFD166" };
@@ -2722,9 +3550,11 @@
         <h2 style="margin:0;font-size:17px;font-weight:600;">Posição financeira</h2>
         <span class="muted" style="font-size:12px;">o que a empresa tem hoje · não é resultado do período</span>
         <span style="flex:1;"></span>
-        ${b.completo
-          ? `<span class="badge badge--manutencao">🟢 todos os blocos disponíveis</span>`
-          : `<span class="badge badge--saida">⚠ incompleto: ${escapeHtml(b.faltando.join(" · "))}</span>`}
+        ${
+          b.completo
+            ? `<span class="badge badge--manutencao">🟢 todos os blocos disponíveis</span>`
+            : `<span class="badge badge--saida">⚠ incompleto: ${escapeHtml(b.faltando.join(" · "))}</span>`
+        }
       </div>
 
       <div class="fin-kpi ${b.disponivel.disponivel ? "fin-kpi--in" : "fin-kpi--out"}">
@@ -2757,9 +3587,13 @@
       <div class="fin-kpi ${b.aPagar.disponivel && b.aPagar.valor > 0 ? "fin-kpi--out" : ""}">
         <span class="fin-kpi__value">🔴 ${fmtValor_(b.aPagar)}</span>
         <span class="fin-kpi__label">A pagar</span>
-        ${b.aPagar.disponivel ? `<span class="muted" style="font-size:11px;">
+        ${
+          b.aPagar.disponivel
+            ? `<span class="muted" style="font-size:11px;">
           vencido ${fmtMoneyExato_(b.aPagar.balde.vencido)} · 7d ${fmtMoneyExato_(b.aPagar.balde.hoje + b.aPagar.balde.ate7)} · 30d ${fmtMoneyExato_(b.aPagar.balde.ate30)}
-        </span>` : selo_(b.aPagar)}
+        </span>`
+            : selo_(b.aPagar)
+        }
       </div>
 
       <div style="grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;
@@ -2801,9 +3635,10 @@
           { icone: "🏦", nome: "Caixa / Mercado Pago", c: b.disponivel, cor: "#5BE49B" },
           { icone: "💳", nome: "A receber", c: b.aReceber, cor: "#5B9CFF" },
           { icone: "📦", nome: "Estoque", c: b.estoque, cor: "#FFA857" },
-        ].map((l) => {
-          const p = l.c.disponivel ? onde(l.c.valor) : 0;
-          return `
+        ]
+          .map((l) => {
+            const p = l.c.disponivel ? onde(l.c.valor) : 0;
+            return `
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px;">
               <span style="width:190px;font-size:13px;">${l.icone} ${l.nome}</span>
               <span style="width:110px;text-align:right;font-size:13px;font-weight:600;">${fmtValor_(l.c)}</span>
@@ -2812,7 +3647,8 @@
               </span>
               <span style="width:52px;text-align:right;font-size:12px;" class="muted">${l.c.disponivel ? fmtPct(p) : "—"}</span>
             </div>`;
-        }).join("")}
+          })
+          .join("")}
         <div style="display:flex;gap:10px;margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,0.08);">
           <span style="width:190px;font-size:13px;font-weight:600;">TOTAL</span>
           <span style="width:110px;text-align:right;font-size:13px;font-weight:700;">${fmtMoneyExato_(totalOnde)}</span>
@@ -2826,15 +3662,37 @@
         <span class="muted">ML ${fmtMoneyExato_(rec.faturadoMl)} → MP ${fmtMoneyExato_(rec.recebidoMp)} (a diferença é comissão e frete)</span>
       </div>
 
-      ${alertas.length ? `
+      ${
+        alertas.length
+          ? `
         <div style="grid-column:1/-1;padding:12px 16px;border-radius:12px;background:rgba(255,255,255,0.03);">
           <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Alertas</div>
-          ${alertas.map((a) => `
+          ${alertas
+            .map(
+              (a) => `
             <div style="font-size:12px;line-height:1.7;">
               <span style="color:${cor[a.nivel]};">●</span> ${a.texto}
-            </div>`).join("")}
-        </div>` : ""}
+            </div>`
+            )
+            .join("")}
+        </div>`
+          : ""
+      }
     `;
+
+    // Entrada: uma vez só, na primeira vez que a Posição Financeira
+    // aparece. Nas atualizações automáticas de 60 em 60 segundos ela não
+    // repete — animar de novo a cada minuto seria a definição de motion
+    // que a pessoa é obrigada a notar.
+    Motion.entrada(container, "capital");
+
+    // Nos números, o contrário: aqui o movimento é informação. Numa tela
+    // que se atualiza sozinha, o valor que mudou precisa se identificar,
+    // senão você olha o painel e não sabe o que é novo. Por isso só marca
+    // quando o texto realmente mudou desde a última pintura.
+    container.querySelectorAll(".fin-kpi__value").forEach((el, i) => {
+      Motion.valorMudou(el, "kpi" + i);
+    });
   }
 
   // Se o HTML não tiver o container, cria um logo abaixo das métricas do
@@ -2846,11 +3704,11 @@
     if (!ancora) return null;
     el = document.createElement("div");
     el.id = "capitalEmpresaRow";
-    el.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin:24px 0 8px;";
+    el.style.cssText =
+      "display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin:24px 0 8px;";
     ancora.parentNode.insertBefore(el, ancora.nextSibling);
     return el;
   }
-
 
   // ============================================================ DRE / P&L
   //
@@ -2884,13 +3742,21 @@
   function intervaloDoPeriodo_(p) {
     const hoje = new Date();
     const iso = (d) => isoDate_(d);
-    const menos = (n) => { const d = new Date(hoje); d.setDate(d.getDate() - n); return d; };
+    const menos = (n) => {
+      const d = new Date(hoje);
+      d.setDate(d.getDate() - n);
+      return d;
+    };
 
-    if (p.modo === "hoje")  return { de: iso(hoje), ate: iso(hoje), rotulo: "hoje" };
-    if (p.modo === "ontem") { const o = menos(1); return { de: iso(o), ate: iso(o), rotulo: "ontem" }; }
-    if (p.modo === "7d")    return { de: iso(menos(6)), ate: iso(hoje), rotulo: "últimos 7 dias" };
-    if (p.modo === "30d")   return { de: iso(menos(29)), ate: iso(hoje), rotulo: "últimos 30 dias" };
-    if (p.modo === "dia")   return { de: p.valor, ate: p.valor, rotulo: p.valor.split("-").reverse().join("/") };
+    if (p.modo === "hoje") return { de: iso(hoje), ate: iso(hoje), rotulo: "hoje" };
+    if (p.modo === "ontem") {
+      const o = menos(1);
+      return { de: iso(o), ate: iso(o), rotulo: "ontem" };
+    }
+    if (p.modo === "7d") return { de: iso(menos(6)), ate: iso(hoje), rotulo: "últimos 7 dias" };
+    if (p.modo === "30d") return { de: iso(menos(29)), ate: iso(hoje), rotulo: "últimos 30 dias" };
+    if (p.modo === "dia")
+      return { de: p.valor, ate: p.valor, rotulo: p.valor.split("-").reverse().join("/") };
     if (p.modo === "mes") {
       const m = p.valor || iso(hoje).slice(0, 7);
       return { de: m + "-01", ate: m + "-31", rotulo: fmtMesLabel_(m + "-01") };
@@ -2906,7 +3772,11 @@
       return d >= de && d <= ate;
     });
 
-    let faturamento = 0, custo = 0, taxa = 0, frete = 0, unidades = 0;
+    let faturamento = 0,
+      custo = 0,
+      taxa = 0,
+      frete = 0,
+      unidades = 0;
     const pedidos = new Set();
     doPeriodo.forEach((t) => {
       faturamento += Number(t.faturamento || 0);
@@ -2918,13 +3788,26 @@
     });
 
     // Devoluções do mesmo período — dinheiro que voltou pro comprador
-    const devolvido = (state.devolucoes || []).concat(state.devolucoes_2 || [])
-      .filter((d) => { const x = String(d.data || ""); return x >= de && x <= ate; })
+    const devolvido = (state.devolucoes || [])
+      .concat(state.devolucoes_2 || [])
+      .filter((d) => {
+        const x = String(d.data || "");
+        return x >= de && x <= ate;
+      })
       .reduce((s, d) => s + Number(d.valor_reembolsado || 0), 0);
 
     const lucro = faturamento - custo - taxa - frete;
     return {
-      rotulo, de, ate, faturamento, custo, taxa, frete, lucro, devolvido, unidades,
+      rotulo,
+      de,
+      ate,
+      faturamento,
+      custo,
+      taxa,
+      frete,
+      lucro,
+      devolvido,
+      unidades,
       pedidos: pedidos.size,
       margem: faturamento > 0 ? lucro / faturamento : 0,
       ticket: pedidos.size > 0 ? faturamento / pedidos.size : 0,
@@ -2953,12 +3836,24 @@
         <span class="muted" style="font-size:12px;">quanto a operação ganhou — não é patrimônio</span>
         <span style="flex:1;"></span>
         <select id="dreModo" class="search-input" style="min-width:145px;">
-          ${[["hoje","Hoje"],["ontem","Ontem"],["7d","Últimos 7 dias"],["30d","Últimos 30 dias"],["mes","Por mês"],["dia","Dia específico"]]
-            .map(([v,t]) => `<option value="${v}" ${p.modo === v ? "selected" : ""}>${t}</option>`).join("")}
+          ${[
+            ["hoje", "Hoje"],
+            ["ontem", "Ontem"],
+            ["7d", "Últimos 7 dias"],
+            ["30d", "Últimos 30 dias"],
+            ["mes", "Por mês"],
+            ["dia", "Dia específico"],
+          ]
+            .map(([v, t]) => `<option value="${v}" ${p.modo === v ? "selected" : ""}>${t}</option>`)
+            .join("")}
         </select>
-        ${p.modo === "mes" ? `<select id="dreValor" class="search-input" style="min-width:150px;">
+        ${
+          p.modo === "mes"
+            ? `<select id="dreValor" class="search-input" style="min-width:150px;">
           ${meses.map((m) => `<option value="${m}" ${m === p.valor ? "selected" : ""}>${fmtMesLabel_(m + "-01")}</option>`).join("")}
-        </select>` : ""}
+        </select>`
+            : ""
+        }
         ${p.modo === "dia" ? `<input type="date" id="dreValor" class="search-input" value="${p.valor || hojeIso}" max="${hojeIso}">` : ""}
       </div>
 
@@ -2980,20 +3875,22 @@
     `;
 
     const selModo = document.getElementById("dreModo");
-    if (selModo) selModo.addEventListener("change", () => {
-      const modo = selModo.value;
-      const ms = mesesComVenda_();
-      state.capitalPeriodo = {
-        modo,
-        valor: modo === "mes" ? (ms[0] || hojeIso.slice(0, 7)) : modo === "dia" ? hojeIso : "",
-      };
-      renderDre_();
-    });
+    if (selModo)
+      selModo.addEventListener("change", () => {
+        const modo = selModo.value;
+        const ms = mesesComVenda_();
+        state.capitalPeriodo = {
+          modo,
+          valor: modo === "mes" ? ms[0] || hojeIso.slice(0, 7) : modo === "dia" ? hojeIso : "",
+        };
+        renderDre_();
+      });
     const selValor = document.getElementById("dreValor");
-    if (selValor) selValor.addEventListener("change", () => {
-      state.capitalPeriodo = { modo: p.modo, valor: selValor.value };
-      renderDre_();
-    });
+    if (selValor)
+      selValor.addEventListener("change", () => {
+        state.capitalPeriodo = { modo: p.modo, valor: selValor.value };
+        renderDre_();
+      });
   }
 
   function garantirContainerDre_() {
@@ -3035,8 +3932,10 @@
     if (!chartJsDisponivel_("tendenciaHorariaChart")) return;
 
     const hoje = new Date();
-    const ontem = new Date(hoje); ontem.setDate(ontem.getDate() - 1);
-    const isoHoje = isoDate_(hoje), isoOntem = isoDate_(ontem);
+    const ontem = new Date(hoje);
+    ontem.setDate(ontem.getDate() - 1);
+    const isoHoje = isoDate_(hoje),
+      isoOntem = isoDate_(ontem);
 
     const porHora = (isoDia) => {
       const horas = new Array(24).fill(0);
@@ -3062,21 +3961,43 @@
       data: {
         labels: Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0")),
         datasets: [
-          { label: "Hoje", data: serieHojeCortada, borderColor: "#5B9CFF", backgroundColor: "transparent", tension: 0.35, pointRadius: 0, spanGaps: false },
-          { label: "Ontem", data: serieOntem, borderColor: "#FF6B9D", backgroundColor: "transparent", tension: 0.35, pointRadius: 0 },
+          {
+            label: "Hoje",
+            data: serieHojeCortada,
+            borderColor: "#5B9CFF",
+            backgroundColor: "transparent",
+            tension: 0.35,
+            pointRadius: 0,
+            spanGaps: false,
+          },
+          {
+            label: "Ontem",
+            data: serieOntem,
+            borderColor: "#FF6B9D",
+            backgroundColor: "transparent",
+            tension: 0.35,
+            pointRadius: 0,
+          },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: true, position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } } },
-        scales: { x: { title: { display: true, text: "Horas", font: { size: 10 } }, ticks: { font: { size: 10 } } }, y: { ticks: { font: { size: 10 } } } },
+        plugins: {
+          legend: { display: true, position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } },
+        },
+        scales: {
+          x: { title: { display: true, text: "Horas", font: { size: 10 } }, ticks: { font: { size: 10 } } },
+          y: { ticks: { font: { size: 10 } } },
+        },
       },
     });
   }
 
   function renderMaisVendidosHoje_(isoDia) {
-    const fotoPorSku = {}, linkPorSku = {}, estoquePorSku = {};
+    const fotoPorSku = {},
+      linkPorSku = {},
+      estoquePorSku = {};
     state.produtos.forEach((p) => {
       fotoPorSku[p["SKUs"]] = p["Foto URL"];
       linkPorSku[p["SKUs"]] = p["Link Anúncio"];
@@ -3088,18 +4009,23 @@
       if (!grupos[t.sku]) grupos[t.sku] = { sku: t.sku, faturamento: 0 };
       grupos[t.sku].faturamento += Number(t.faturamento || 0);
     });
-    const top = Object.values(grupos).sort((a, b) => b.faturamento - a.faturamento).slice(0, 5);
+    const top = Object.values(grupos)
+      .sort((a, b) => b.faturamento - a.faturamento)
+      .slice(0, 5);
 
     const lista = document.getElementById("maisVendidosHojeLista");
     if (!top.length) {
       lista.innerHTML = `<p class="muted" style="padding:16px;text-align:center;">Nenhuma venda hoje ainda.</p>`;
       return;
     }
-    lista.innerHTML = top.map((item, i) => {
-      const estoque = estoquePorSku[item.sku];
-      const avisoEstoque = estoque !== undefined && estoque <= 5
-        ? `<span style="color:var(--saida);"> ⚠ estoque baixo</span>` : "";
-      return `
+    lista.innerHTML = top
+      .map((item, i) => {
+        const estoque = estoquePorSku[item.sku];
+        const avisoEstoque =
+          estoque !== undefined && estoque <= 5
+            ? `<span style="color:var(--saida);"> ⚠ estoque baixo</span>`
+            : "";
+        return `
         <div class="mv-item ${i === 0 ? "mv-item--primeiro" : ""}">
           <span class="mv-item__rank">${i + 1}</span>
           ${fmtFoto(fotoPorSku[item.sku])}
@@ -3109,16 +4035,19 @@
           </div>
           <span class="mv-item__valor">${fmtMoney(item.faturamento)}</span>
         </div>`;
-    }).join("");
+      })
+      .join("");
   }
 
   function renderTendencia() {
     const comVenda = state.produtos.filter((p) => Number(p["Últimos 30 dias"] || 0) > 0);
-    const subindo = [], estavel = [], caindo = [];
+    const subindo = [],
+      estavel = [],
+      caindo = [];
     comVenda.forEach((p) => {
       const evol = Number(p["Evolução últimos 30 dias"] || 0);
-      if (evol > 0.10) subindo.push(p);
-      else if (evol < -0.10) caindo.push(p);
+      if (evol > 0.1) subindo.push(p);
+      else if (evol < -0.1) caindo.push(p);
       else estavel.push(p);
     });
     subindo.sort((a, b) => Number(b["Evolução últimos 30 dias"]) - Number(a["Evolução últimos 30 dias"]));
@@ -3131,11 +4060,18 @@
           <span class="tend-card__title">${titulo}</span>
           <span class="tend-card__count">${lista.length}</span>
         </div>
-        ${lista.slice(0, 5).map((p) => `
+        ${
+          lista
+            .slice(0, 5)
+            .map(
+              (p) => `
           <div class="tend-item">
             <span class="tend-item__sku">${escapeHtml(p["SKUs"])}</span>
             <span class="tend-item__pct ${cls === "down" ? "down" : cls === "up" ? "up" : ""}">${fmtPct(p["Evolução últimos 30 dias"])}</span>
-          </div>`).join("") || `<p class="muted" style="font-size:12px;">Nenhum produto aqui.</p>`}
+          </div>`
+            )
+            .join("") || `<p class="muted" style="font-size:12px;">Nenhum produto aqui.</p>`
+        }
       </div>`;
 
     document.getElementById("tendenciaRow").innerHTML =
@@ -3157,8 +4093,11 @@
       const dias = p["Dias até Ruptura"];
       if (dias !== "-" && dias !== undefined && dias !== null && Number(dias) <= 7) {
         itens.push({
-          sku: p["SKUs"], foto: p["Foto URL"], link: p["Link Anúncio"],
-          tag: "🔴 Ruptura", tipo: "ruptura",
+          sku: p["SKUs"],
+          foto: p["Foto URL"],
+          link: p["Link Anúncio"],
+          tag: "🔴 Ruptura",
+          tipo: "ruptura",
           desc: `Estoque acaba em ${dias} dia(s) — repor agora`,
           prioridade: 0 + Number(dias) / 100,
         });
@@ -3169,8 +4108,11 @@
       if (p["Inativo"]) return;
       if ((p["DIRETRIZ"] || "").includes("SAÍDA")) {
         itens.push({
-          sku: p["SKUs"], foto: p["Foto URL"], link: p["Link Anúncio"],
-          tag: "🟠 Em saída", tipo: "saida",
+          sku: p["SKUs"],
+          foto: p["Foto URL"],
+          link: p["Link Anúncio"],
+          tag: "🟠 Em saída",
+          tipo: "saida",
           desc: "Vendas fracas e nota baixa — considere promoção ou tirar de linha",
           prioridade: 1,
         });
@@ -3181,10 +4123,13 @@
       if (p["Inativo"]) return;
       const margem = p["_margem"];
       const fat = Number(p["_fat_rs"] || 0);
-      if (margem !== undefined && margem < 0.10 && fat > 0 && !(p["DIRETRIZ"] || "").includes("SAÍDA")) {
+      if (margem !== undefined && margem < 0.1 && fat > 0 && !(p["DIRETRIZ"] || "").includes("SAÍDA")) {
         itens.push({
-          sku: p["SKUs"], foto: p["Foto URL"], link: p["Link Anúncio"],
-          tag: "🟡 Margem baixa", tipo: "margem",
+          sku: p["SKUs"],
+          foto: p["Foto URL"],
+          link: p["Link Anúncio"],
+          tag: "🟡 Margem baixa",
+          tipo: "margem",
           desc: `Margem de ${fmtPct(margem)} — revise custo ou preço`,
           prioridade: 2 - margem,
         });
@@ -3198,13 +4143,18 @@
       body.innerHTML = `<p class="acao-vazio">Nenhuma prioridade urgente hoje — tudo dentro do esperado.</p>`;
       return;
     }
-    body.innerHTML = itens.slice(0, 15).map((it) => `
+    body.innerHTML = itens
+      .slice(0, 15)
+      .map(
+        (it) => `
       <div class="acao-item">
         ${fmtFoto(it.foto)}
         <span class="acao-item__tag acao-item__tag--${it.tipo}">${it.tag}</span>
         ${fmtSkuLink(it.sku, it.link)}
         <span class="acao-item__desc">${escapeHtml(it.desc)}</span>
-      </div>`).join("");
+      </div>`
+      )
+      .join("");
   }
 
   function renderMeta() {
@@ -3228,7 +4178,8 @@
     const progresso = Math.min((faturadoMes / meta) * 100, 999);
     const projecao = diaAtual > 0 ? (faturadoMes / diaAtual) * diasNoMes : 0;
     const faltaAtingir = Math.max(meta - faturadoMes, 0);
-    const ritmoNecessario = diasRestantes > 0 ? faltaAtingir / diasRestantes : (faltaAtingir > 0 ? Infinity : 0);
+    const ritmoNecessario =
+      diasRestantes > 0 ? faltaAtingir / diasRestantes : faltaAtingir > 0 ? Number.POSITIVE_INFINITY : 0;
     const vaiBater = projecao >= meta;
 
     let corBarra = "critico";
@@ -3241,7 +4192,7 @@
       <p class="muted" style="font-size:12px;margin:0 0 12px;">${fmtMoney(faturadoMes)} de ${fmtMoney(meta)} — ${progresso.toFixed(0)}% da meta, dia ${diaAtual} de ${diasNoMes}</p>
       <div class="meta-grid">
         <div class="meta-stat">
-          <span class="meta-stat__value">${fmtMoney(ritmoNecessario === Infinity ? faltaAtingir : ritmoNecessario)}</span>
+          <span class="meta-stat__value">${fmtMoney(ritmoNecessario === Number.POSITIVE_INFINITY ? faltaAtingir : ritmoNecessario)}</span>
           <span class="meta-stat__label">${diasRestantes > 0 ? "Precisa faturar por dia (dias restantes)" : "Faltam " + fmtMoney(faltaAtingir) + " — sem dias restantes"}</span>
         </div>
         <div class="meta-stat">
@@ -3267,12 +4218,18 @@
     th.addEventListener("click", () => {
       const key = th.dataset.key;
       if (state.sortKey === key) state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
-      else { state.sortKey = key; state.sortDir = "desc"; }
+      else {
+        state.sortKey = key;
+        state.sortDir = "desc";
+      }
       renderTable();
     });
   });
 
-  els.searchInput.addEventListener("input", (e) => { state.search = e.target.value; renderTable(); });
+  els.searchInput.addEventListener("input", (e) => {
+    state.search = e.target.value;
+    renderTable();
+  });
   els.refreshBtn.addEventListener("click", fetchData);
 
   function openSettings() {
@@ -3314,13 +4271,17 @@
     const body = document.getElementById("transBody");
     const count = document.getElementById("transCount");
     const skuInfo = {};
-    state.produtos.forEach((p) => { skuInfo[p["SKUs"]] = p["Fornecedor"]; });
+    state.produtos.forEach((p) => {
+      skuInfo[p["SKUs"]] = p["Fornecedor"];
+    });
 
     if (state.transModo === "detalhado") {
       head.innerHTML = `<th>Data</th><th>SKU</th><th>Fornecedor</th><th class="num">Qtd</th><th class="num">Faturamento</th><th class="num">Lucro</th>`;
       const linhas = [...state.transacoes].sort((a, b) => (a.data < b.data ? 1 : -1));
       count.textContent = `(${linhas.length})`;
-      body.innerHTML = linhas.map((t) => `
+      body.innerHTML = linhas
+        .map(
+          (t) => `
         <tr>
           <td>${(t.data || "").slice(0, 10).split("-").reverse().join("/")}</td>
           <td class="sku-cell">${escapeHtml(t.sku)}</td>
@@ -3328,7 +4289,9 @@
           <td class="num">${fmtNum(t.quantidade)}</td>
           <td class="num">${fmtMoney(t.faturamento)}</td>
           <td class="num">${fmtMoney(t.lucro)}</td>
-        </tr>`).join("");
+        </tr>`
+        )
+        .join("");
     } else {
       head.innerHTML = `<th>SKU</th><th>Fornecedor</th><th class="num">Qtd total</th><th class="num">Faturamento total</th><th class="num">Lucro total</th><th class="num"># vendas</th>`;
       const grupos = {};
@@ -3341,7 +4304,9 @@
       });
       const linhas = Object.values(grupos).sort((a, b) => b.faturamento - a.faturamento);
       count.textContent = `(${linhas.length} SKUs)`;
-      body.innerHTML = linhas.map((g) => `
+      body.innerHTML = linhas
+        .map(
+          (g) => `
         <tr>
           <td class="sku-cell">${escapeHtml(g.sku)}</td>
           <td>${escapeHtml(skuInfo[g.sku] ?? "-")}</td>
@@ -3349,7 +4314,9 @@
           <td class="num">${fmtMoney(g.faturamento)}</td>
           <td class="num">${fmtMoney(g.lucro)}</td>
           <td class="num">${g.n}</td>
-        </tr>`).join("");
+        </tr>`
+        )
+        .join("");
     }
   }
 
@@ -3358,7 +4325,9 @@
     if (!btn) return;
     const tab = btn.dataset.tab;
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
-    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("active", p.dataset.tab === tab));
+    document
+      .querySelectorAll(".tab-panel")
+      .forEach((p) => p.classList.toggle("active", p.dataset.tab === tab));
     // Reconstrói os gráficos da aba que acabou de aparecer — o Chart.js
     // calcula o tamanho errado se for criado enquanto a aba está escondida.
     if (tab === "produtos" && state.produtos.length) renderCharts();
@@ -3370,6 +4339,10 @@
   });
 
   // ---------------------------------------------------------------- init
+  // A telemetria começa ANTES de qualquer outra coisa: um erro dentro do
+  // próprio initPeriodoPickers_ também precisa ser capturado.
+  Telemetria.iniciar();
+  Motion.instalar();
   initPeriodoPickers_();
   fetchData();
   setInterval(fetchData, 60000); // atualiza sozinho a cada 1 min
